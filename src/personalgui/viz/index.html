@@ -1,0 +1,1918 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>PersonalGUI Viewer</title>
+<style>
+  :root {
+    --bg: #1c2024; --panel-text: #1a1d23;
+    --muted: #6e7682; --muted-soft: #a7b0bc;
+    --accent: #2870ff; --accent-soft: #d6e3ff;
+    --ok: #1f8a4a; --ok-soft: #2ec27e;
+    --err: #c93f3f; --err-soft: #e25c5c;
+    --warn: #b87a18; --warn-soft: #e7c179;
+    --pending: #4a4f57;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  }
+  body { margin: 0; background: linear-gradient(180deg, #2a2f36 0%, #1c2024 100%); color: #e6ebf1; font-size: 14px; min-height: 100vh; }
+  header { padding: 12px 20px; border-bottom: 1px solid #353a42; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; background: rgba(0,0,0,0.15); }
+  header h1 { margin: 0; font-size: 14px; letter-spacing: 0.04em; color: #cdd5e0; }
+  header .agent-chip { background: rgba(40,112,255,0.18); color: var(--accent-soft); border: 1px solid var(--accent); border-radius: 12px; padding: 2px 10px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; }
+  header .meta { color: var(--muted); font-size: 12px; }
+  header .episode-status { padding: 3px 10px; border-radius: 4px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; }
+  header .episode-status.running { background: rgba(40,112,255,0.18); color: var(--accent-soft); }
+  header .episode-status.complete-ok { background: rgba(31,138,74,0.2); color: var(--ok-soft); }
+  header .episode-status.complete-fail { background: rgba(201,63,63,0.2); color: var(--err-soft); }
+  header .spacer { flex: 1; }
+  header select.task-select { background: #1f2227; color: #e6ebf1; border: 1px solid #353a42; border-radius: 6px; padding: 5px 10px; font-size: 12px; }
+  header .done-btn { background: var(--accent); color: white; border: none; border-radius: 6px; padding: 6px 14px; font-size: 12px; font-weight: 700; cursor: pointer; letter-spacing: 0.04em; }
+  header .done-btn:disabled { background: var(--pending); cursor: not-allowed; opacity: 0.6; }
+
+  .toast { position: fixed; top: 60px; right: 24px; background: #1f2227; border: 1px solid var(--accent); border-radius: 8px; padding: 10px 16px; color: var(--accent-soft); font-size: 13px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); z-index: 1000; opacity: 0; transform: translateY(-8px); transition: opacity 200ms, transform 200ms; }
+
+  /* Replay control bar */
+  .replay-bar {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 20px; background: #15171b; border-bottom: 1px solid #353a42;
+    flex-wrap: wrap;
+  }
+  .replay-bar .replay-btn {
+    background: #1f2227; border: 1px solid #353a42; color: #e6ebf1;
+    border-radius: 6px; width: 34px; height: 30px; cursor: pointer; font-size: 13px;
+  }
+  .replay-bar .replay-btn:hover:not([disabled]) { background: rgba(40,112,255,0.18); border-color: var(--accent); }
+  .replay-bar .replay-btn[disabled] { opacity: 0.4; cursor: default; }
+  .replay-bar .replay-step { font-family: ui-monospace, monospace; font-size: 12px; color: #cdd5e0; min-width: 90px; text-align: center; }
+  .replay-bar .replay-slider { flex: 0 1 240px; accent-color: var(--accent); }
+  .replay-bar .replay-next-action {
+    font-family: ui-monospace, monospace; font-size: 12px; color: var(--muted-soft);
+    flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .replay-bar .replay-next-action b { color: var(--accent-soft); }
+
+  /* Step detail: input → action → result for the pending step */
+  .step-detail {
+    margin: 14px 24px 0; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0;
+    background: #1f2227; border: 1px solid #353a42; border-radius: 10px; overflow: hidden;
+  }
+  @media (max-width: 1000px) { .step-detail { grid-template-columns: 1fr; } }
+  .step-col { padding: 12px 16px; border-right: 1px solid #353a42; }
+  .step-col:last-child { border-right: none; }
+  .step-col h4 {
+    margin: 0 0 8px; font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; font-weight: 700;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .step-col.input h4 { color: var(--muted-soft); }
+  .step-col.action h4 { color: var(--accent); }
+  .step-col.result h4 { color: var(--ok-soft); }
+  .step-col.result.rejected h4 { color: var(--err-soft); }
+  .step-col .kv { display: grid; grid-template-columns: max-content 1fr; gap: 3px 10px; font-size: 12px; font-family: ui-monospace, monospace; }
+  .step-col .kv .k { color: var(--muted); }
+  .step-col .kv .v { color: #e6ebf1; word-break: break-word; }
+  .step-col .blob { font-family: ui-monospace, monospace; font-size: 11px; color: var(--muted-soft); background: rgba(0,0,0,0.2); border-radius: 6px; padding: 8px; margin-top: 6px; white-space: pre-wrap; word-break: break-word; max-height: 140px; overflow-y: auto; }
+  .step-col .pill { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11px; font-weight: 700; }
+  .step-col .pill.ok { background: rgba(46,194,126,0.18); color: var(--ok-soft); }
+  .step-col .pill.err { background: rgba(226,92,92,0.18); color: var(--err-soft); }
+  .step-detail .empty-step { grid-column: 1 / -1; padding: 18px; text-align: center; color: var(--muted); font-size: 13px; }
+
+  /* LLM call (full prompt + response), spans the step-detail grid */
+  .llm-call { grid-column: 1 / -1; border-top: 1px solid #353a42; padding: 10px 16px; }
+  .llm-call > summary { cursor: pointer; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); font-weight: 700; }
+  .llm-call > summary:hover { color: var(--accent-soft); }
+  .llm-section { margin-top: 10px; }
+  .llm-section h5 { margin: 0 0 4px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); font-weight: 700; }
+  .llm-msg { display: grid; grid-template-columns: 70px 1fr; gap: 8px; padding: 3px 0; align-items: start; }
+  .llm-msg .role { font-size: 10px; font-weight: 700; text-transform: uppercase; padding: 2px 6px; border-radius: 8px; text-align: center; height: fit-content; }
+  .llm-msg .role-system { background: rgba(110,118,130,0.25); color: #cdd5e0; }
+  .llm-msg .role-user { background: rgba(46,194,126,0.18); color: var(--ok-soft); }
+  .llm-msg .role-assistant { background: rgba(40,112,255,0.2); color: var(--accent-soft); }
+  .llm-msg .role-tool { background: rgba(212,161,76,0.2); color: var(--warn-soft); }
+  .llm-call pre, .action-llm-body pre { white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, monospace; font-size: 11px; line-height: 1.45; margin: 0; color: #d8dde6; background: rgba(0,0,0,0.22); border-radius: 6px; padding: 8px; max-height: 280px; overflow-y: auto; }
+  .llm-call .resp-pre, .action-llm-body .resp-pre { border: 1px solid var(--accent); }
+  .action-llm-body .llm-msg { display: grid; grid-template-columns: 70px 1fr; gap: 8px; padding: 3px 0; align-items: start; }
+  .action-llm-body .llm-msg .role { font-size: 10px; font-weight: 700; text-transform: uppercase; padding: 2px 6px; border-radius: 8px; text-align: center; height: fit-content; }
+  .action-llm-body .role-system { background: rgba(110,118,130,0.25); color: #cdd5e0; }
+  .action-llm-body .role-user { background: rgba(46,194,126,0.18); color: var(--ok-soft); }
+  .action-llm-body .role-assistant { background: rgba(40,112,255,0.2); color: var(--accent-soft); }
+  .action-llm-body .role-tool { background: rgba(212,161,76,0.2); color: var(--warn-soft); }
+  .toast.show { opacity: 1; transform: translateY(0); }
+  .toast.err { border-color: var(--err); color: var(--err-soft); }
+
+  /* PLAN PANEL (decomposition) */
+  .plan-panel { margin: 16px 24px 0; background: #1f2227; border: 1px solid #353a42; border-radius: 10px; overflow: hidden; }
+  .plan-panel.locked { border-color: var(--accent); }
+  .plan-panel-header { padding: 12px 16px; border-bottom: 1px solid #353a42; background: rgba(255,255,255,0.02); display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .plan-panel-header .label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); font-weight: 700; }
+  .plan-panel-header .desc { flex: 1; color: var(--muted-soft); font-size: 12px; }
+  .plan-panel-body { padding: 12px 16px 16px; }
+  .plan-row {
+    display: grid; grid-template-columns: 30px 1fr 1.5fr 130px 30px; gap: 10px;
+    align-items: center; padding: 4px 0;
+  }
+  .plan-row .num { color: var(--muted); font-family: ui-monospace, monospace; font-size: 12px; text-align: center; }
+  .plan-row input[type="text"], .plan-row select {
+    background: #15171b; border: 1px solid #353a42; border-radius: 5px; padding: 6px 10px;
+    color: #e6ebf1; font-size: 13px; font-family: inherit; outline: none; width: 100%;
+  }
+  .plan-row input[type="text"]:focus, .plan-row select:focus { border-color: var(--accent); }
+  .plan-row .rm-btn { background: transparent; border: none; color: var(--muted); cursor: pointer; font-size: 16px; padding: 0; }
+  .plan-row .rm-btn:hover { color: var(--err-soft); }
+  .plan-panel .add-btn, .plan-panel .submit-btn {
+    background: rgba(40,112,255,0.15); border: 1px solid var(--accent); color: var(--accent);
+    border-radius: 6px; padding: 6px 14px; font-size: 12px; font-weight: 700; cursor: pointer;
+    margin-top: 12px; margin-right: 8px;
+  }
+  .plan-panel .submit-btn { background: var(--accent); color: white; }
+  .plan-panel .add-btn:hover { background: rgba(40,112,255,0.3); }
+  .plan-panel .submit-btn:hover { background: #1e5bd6; }
+  .plan-panel .submitted-list { padding: 4px 0; }
+  .plan-submitted-row { display: grid; grid-template-columns: 30px 20px 1fr; gap: 10px; padding: 4px 0; align-items: baseline; font-size: 13px; }
+  .plan-submitted-row .num { color: var(--muted); font-family: ui-monospace, monospace; font-size: 12px; text-align: center; }
+  .plan-submitted-row .visit { font-size: 14px; text-align: center; color: var(--pending); }
+  .plan-submitted-row .visit.done { color: var(--ok-soft); }
+
+  .task-panel { margin: 12px 24px 0; background: #1f2227; border: 1px solid #353a42; border-radius: 10px; overflow: hidden; }
+  .task-panel-header { padding: 12px 16px; border-bottom: 1px solid #353a42; background: rgba(255,255,255,0.02); display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .task-panel-header .label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); font-weight: 600; }
+  .task-panel-header .request { flex: 1; font-size: 15px; font-weight: 500; color: #e6ebf1; margin-left: 14px; }
+  .task-panel-header .id { font-family: ui-monospace, monospace; color: var(--muted); font-size: 11px; }
+  .task-panel-body { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0; }
+  @media (max-width: 1100px) { .task-panel-body { grid-template-columns: 1fr; } }
+  .task-section { padding: 12px 16px; border-right: 1px solid #353a42; }
+  .task-section:last-child { border-right: none; }
+  .task-section h3 { margin: 0 0 8px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; font-weight: 700; }
+  .task-section h3 .sub { font-weight: 500; text-transform: none; letter-spacing: 0; color: var(--muted-soft); font-size: 10px; margin-left: 6px; }
+  .checklist-item { display: grid; grid-template-columns: 20px 1fr; gap: 8px; align-items: baseline; padding: 4px 0; font-size: 13px; line-height: 1.35; }
+  .check { font-size: 14px; text-align: center; color: var(--pending); }
+  .check.done { color: var(--ok-soft); }
+  .check.fail { color: var(--err-soft); }
+  .check.unknown { color: var(--muted); }
+  .item-id { font-weight: 600; color: #e6ebf1; }
+  .item-desc { color: var(--muted-soft); font-size: 12px; }
+  .item-route { color: var(--muted); font-size: 11px; font-family: ui-monospace, monospace; }
+  .arrow { color: var(--accent); font-weight: 700; }
+  .final-state-row { display: grid; grid-template-columns: 20px 1fr; gap: 8px; font-size: 12px; padding: 4px 0; }
+  .final-state-row .path { color: #e6ebf1; font-family: ui-monospace, monospace; font-size: 11px; }
+  .final-state-row .compare { font-family: ui-monospace, monospace; font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .final-state-row .compare .expected { color: var(--ok-soft); }
+  .final-state-row .compare .actual.match { color: var(--ok-soft); }
+  .final-state-row .compare .actual.miss { color: var(--err-soft); }
+
+  .metrics-banner { margin: 12px 24px 0; background: #1f2227; border: 1px solid #353a42; border-radius: 10px; padding: 12px 16px; display: flex; gap: 24px; flex-wrap: wrap; }
+  .metrics-banner.success { border-color: var(--ok); }
+  .metrics-banner.fail { border-color: var(--err); }
+  .metrics-banner .metric { display: flex; flex-direction: column; gap: 2px; min-width: 100px; }
+  .metrics-banner .metric .k { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; font-weight: 700; }
+  .metrics-banner .metric .v { font-family: ui-monospace, monospace; font-size: 16px; font-weight: 700; color: #e6ebf1; }
+  .metrics-banner .metric .v.ok { color: var(--ok-soft); }
+  .metrics-banner .metric .v.fail { color: var(--err-soft); }
+
+  main { display: flex; flex-direction: column; gap: 24px; padding: 24px; max-width: 1500px; margin: 0 auto; }
+  .env-row { display: flex; flex-wrap: wrap; gap: 32px; align-items: flex-start; }
+  .env-slot { flex: 0 0 auto; min-width: 0; }
+  .env-slot.kind-mobile { width: 300px; }
+  .env-slot.kind-desktop { flex: 1 1 420px; max-width: 720px; }
+
+  .phone-stage { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+  .device-label { font-size: 11px; letter-spacing: 0.18em; color: var(--muted); text-transform: uppercase; font-weight: 600; }
+  .device-label.focused { color: var(--accent); }
+  .phone { width: 280px; background: #0a0a0a; border-radius: 38px; padding: 10px; box-shadow: 0 0 0 2px #2a2a2a, 0 20px 50px rgba(0,0,0,0.55), inset 0 0 0 1px #1a1a1a; position: relative; }
+  .phone.focused { box-shadow: 0 0 0 2px #2a2a2a, 0 0 0 5px var(--accent), 0 20px 50px rgba(0,0,0,0.55); }
+  .phone-screen { background: #f5f6f8; color: var(--panel-text); border-radius: 30px; overflow: hidden; position: relative; min-height: 500px; display: flex; flex-direction: column; }
+  .phone-notch { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); width: 90px; height: 22px; background: #0a0a0a; border-radius: 14px; z-index: 2; }
+  .phone-statusbar { display: flex; justify-content: space-between; align-items: center; padding: 12px 22px 8px; font-size: 12px; font-weight: 600; color: #1a1d23; }
+  .phone-statusbar .right { display: flex; gap: 5px; align-items: center; font-size: 11px; }
+  .phone-app { flex: 1; padding: 14px 16px 18px; display: flex; flex-direction: column; }
+  .phone-app .app-title { font-weight: 700; font-size: 14px; margin-bottom: 12px; }
+
+  .phone .copyable-card {
+    background: #fff; border: 1px solid #e1e5eb; border-radius: 16px; padding: 24px 10px;
+    text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    cursor: pointer; transition: transform 100ms, box-shadow 100ms;
+  }
+  .phone .copyable-card:hover { box-shadow: 0 3px 10px rgba(0,0,0,0.12); }
+  .phone .copyable-card:active { transform: scale(0.98); }
+  .phone .copyable-card.copied { background: #e6f7ec; border-color: #2ec27e; }
+  .phone .copyable-card .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 12px; }
+  .phone .copyable-card .big { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 40px; letter-spacing: 0.12em; font-weight: 700; color: #1a1d23; }
+  .phone .copyable-card .sub { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .phone .copyable-card .copy-cue { font-size: 10px; color: var(--accent); margin-top: 8px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; }
+  .phone-homebar { height: 4px; width: 100px; background: #1a1d23; border-radius: 3px; margin: 6px auto 8px; }
+  .phone-homebar-zone {
+    padding: 6px 0; margin: 0 auto;
+    width: 140px; display: flex; justify-content: center; align-items: center;
+  }
+  .phone-homebar-zone[data-interactive="1"] { cursor: pointer; }
+  .phone-homebar-zone[data-interactive="1"]:hover .phone-homebar { background: var(--accent); }
+
+  /* Phone home screen (iOS-style app grid) */
+  .phone-home-wallpaper {
+    flex: 1;
+    background: linear-gradient(160deg, #2870ff 0%, #5a4fe1 50%, #b04faf 100%);
+    padding: 30px 18px 10px;
+    display: flex; flex-direction: column;
+  }
+  .phone-home-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 24px 8px;
+    align-content: start;
+    flex: 1;
+  }
+  .phone-home-icon {
+    display: flex; flex-direction: column; align-items: center; gap: 6px;
+    cursor: pointer; background: transparent; border: none; padding: 0;
+    color: white;
+  }
+  .phone-home-icon[disabled] { cursor: default; }
+  .phone-home-icon .icon-tile {
+    width: 56px; height: 56px; border-radius: 14px;
+    background: linear-gradient(180deg, #4f8cff 0%, #2e6cdb 100%);
+    display: flex; align-items: center; justify-content: center;
+    color: white; font-weight: 700; font-size: 22px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.22);
+  }
+  .phone-home-icon .icon-tile.icon-c { background: linear-gradient(180deg, #e25c5c 0%, #c93f3f 100%); }
+  .phone-home-icon .icon-tile.icon-p { background: linear-gradient(180deg, #4f8cff 0%, #2e6cdb 100%); }
+  .phone-home-icon .icon-tile.icon-m { background: linear-gradient(180deg, #2ec27e 0%, #1f8a4a 100%); }
+  .phone-home-icon .icon-tile.icon-a { background: linear-gradient(180deg, #d4a14c 0%, #b87a18 100%); }
+  .phone-home-icon .icon-tile.icon-default { background: linear-gradient(180deg, #6e7682 0%, #4a4f57 100%); }
+  .phone-home-icon .icon-label {
+    font-size: 11px; font-weight: 500; color: white;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+    text-align: center;
+    max-width: 70px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+
+  /* Phone chat bubbles */
+  .phone-chat-header { font-weight: 700; font-size: 14px; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid #e1e5eb; color: #1a1d23; }
+  .phone-chat-channel { color: var(--muted); font-weight: 500; font-size: 12px; }
+  .phone-chat-thread { display: flex; flex-direction: column; gap: 10px; }
+  .phone-chat-msg { display: flex; flex-direction: column; max-width: 80%; }
+  .phone-chat-msg.self { align-self: flex-end; align-items: flex-end; }
+  .phone-chat-msg.other { align-self: flex-start; align-items: flex-start; }
+  .phone-chat-sender { font-size: 10px; font-weight: 700; color: #1a1d23; margin-bottom: 2px; }
+  .phone-chat-bubble {
+    padding: 8px 12px; border-radius: 14px; font-size: 13px; line-height: 1.4;
+    color: #1a1d23;
+  }
+  .phone-chat-msg.self .phone-chat-bubble { background: linear-gradient(180deg, #4f8cff 0%, #2e6cdb 100%); color: white; border-bottom-right-radius: 4px; }
+  .phone-chat-msg.other .phone-chat-bubble { background: #e9ebee; border-bottom-left-radius: 4px; }
+  .phone-chat-ts { font-size: 9px; color: var(--muted); margin-top: 2px; }
+
+  /* Phone app dock */
+  .phone-dock {
+    display: flex; justify-content: center; gap: 14px;
+    padding: 10px 16px 6px;
+    background: rgba(255,255,255,0.72);
+    border-top: 1px solid rgba(0,0,0,0.05);
+  }
+  .phone-dock-app {
+    width: 42px; height: 42px;
+    border-radius: 11px;
+    background: linear-gradient(180deg, #4f8cff 0%, #2e6cdb 100%);
+    color: white; font-weight: 700; font-size: 16px;
+    border: none; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.14);
+    position: relative;
+    font-family: inherit;
+  }
+  .phone-dock-app[disabled] { cursor: default; }
+  .phone-dock-app.icon-c { background: linear-gradient(180deg, #e25c5c 0%, #c93f3f 100%); }
+  .phone-dock-app.icon-p { background: linear-gradient(180deg, #4f8cff 0%, #2e6cdb 100%); }
+  .phone-dock-app.icon-m { background: linear-gradient(180deg, #2ec27e 0%, #1f8a4a 100%); }
+  .phone-dock-app.icon-a { background: linear-gradient(180deg, #d4a14c 0%, #b87a18 100%); }
+  .phone-dock-app.icon-default { background: linear-gradient(180deg, #6e7682 0%, #4a4f57 100%); }
+  .phone-dock-app.active::after {
+    content: ""; position: absolute;
+    bottom: -7px; left: 50%; transform: translateX(-50%);
+    width: 22px; height: 3px; background: #1a1d23; border-radius: 2px;
+  }
+
+  /* Contacts list */
+  .contacts-list { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+  .contact-row {
+    display: grid; grid-template-columns: 38px 1fr; gap: 12px;
+    padding: 10px 12px; background: #f7f8fa; border: 1px solid #e1e5eb;
+    border-radius: 8px; align-items: center; cursor: pointer;
+    transition: background-color 80ms;
+  }
+  .contact-row:hover { background: #eef3fb; border-color: #c4d7fa; }
+  .contact-row.active { background: var(--accent-soft); border-color: var(--accent); }
+  .contact-row .avatar {
+    width: 36px; height: 36px; border-radius: 50%; background: linear-gradient(180deg, #6e7682, #4a4f57);
+    color: white; font-weight: 700; font-size: 14px; display: flex; align-items: center; justify-content: center;
+  }
+  .contact-row .meta .name { font-weight: 600; color: #1a1d23; font-size: 13px; }
+  .contact-row .meta .label { font-size: 11px; color: var(--muted); }
+  .contact-row .meta .phone { font-family: ui-monospace, monospace; font-size: 11px; color: #2a2f38; margin-top: 2px; }
+
+  /* Email app */
+  .email-list { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+  .email-thread {
+    display: grid; grid-template-columns: 140px 1fr 80px; gap: 12px;
+    padding: 10px 12px; border-bottom: 1px solid #ecedf0;
+    cursor: pointer; align-items: baseline; font-size: 13px;
+  }
+  .email-thread:hover { background: #f5f7fa; }
+  .email-thread.active { background: var(--accent-soft); }
+  .email-thread .sender { font-weight: 600; color: #1a1d23; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .email-thread .subject { color: #2a2f38; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .email-thread .ts { color: var(--muted); font-size: 11px; text-align: right; }
+  .email-body {
+    margin-top: 16px; padding: 16px; background: #f7f8fa; border: 1px solid #e1e5eb; border-radius: 8px;
+  }
+  .email-body .meta { font-size: 11px; color: var(--muted); margin-bottom: 8px; }
+  .email-body .meta .from { color: #1a1d23; font-weight: 600; }
+  .email-body .subject { font-weight: 600; font-size: 14px; color: #1a1d23; margin-bottom: 8px; }
+  .email-body pre { white-space: pre-wrap; word-wrap: break-word; font-family: inherit; font-size: 13px; line-height: 1.5; margin: 0; color: #2a2f38; }
+  .ooo-panel {
+    margin-top: 18px; padding: 14px; background: rgba(40,112,255,0.04);
+    border: 1px dashed rgba(40,112,255,0.4); border-radius: 8px;
+  }
+  .ooo-panel.enabled { background: rgba(31,138,74,0.06); border-color: rgba(31,138,74,0.5); }
+  .ooo-panel .ooo-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--accent); font-weight: 700; margin-bottom: 8px; }
+  .ooo-panel.enabled .ooo-label { color: var(--ok); }
+
+  /* Document editor */
+  .doc-editor textarea {
+    width: 100%; min-height: 320px; resize: vertical;
+    border: 1px solid #d0d4da; border-radius: 6px;
+    padding: 12px; font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 13px; line-height: 1.5; color: #1a1d23; background: #fbfbfc;
+    outline: none;
+  }
+  .doc-editor textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(40,112,255,0.18); }
+  .doc-editor .ro-body { white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 13px; padding: 12px; background: #f7f8fa; border-radius: 6px; }
+
+  /* Profile (LinkedIn-style read-only card) */
+  .profile-card { background: #f7f8fa; border: 1px solid #e1e5eb; border-radius: 10px; padding: 18px; }
+  .profile-card .name { font-size: 17px; font-weight: 700; color: #1a1d23; margin-bottom: 4px; }
+  .profile-card .updated { font-size: 11px; color: var(--muted); margin-bottom: 12px; }
+  .profile-card .field {
+    display: grid; grid-template-columns: 100px 1fr; gap: 12px;
+    padding: 6px 0; border-top: 1px solid #ecedf0;
+    align-items: baseline; cursor: pointer;
+  }
+  .profile-card .field:first-of-type { border-top: 0; }
+  .profile-card .field:hover { background: #eef3fb; }
+  .profile-card .field .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+  .profile-card .field .v { font-family: ui-monospace, monospace; font-size: 13px; color: #1a1d23; }
+
+  /* Desktop calendar (signed-in Outlook etc.) */
+  .desktop-calendar { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
+  .desktop-calendar-event {
+    display: grid; grid-template-columns: 110px 1fr; gap: 14px;
+    padding: 12px 14px; background: #f7f8fa; border: 1px solid #e1e5eb;
+    border-radius: 8px; align-items: center; font-size: 13px;
+  }
+  .desktop-calendar-event:hover { background: #eef3fb; border-color: #c4d7fa; }
+  .desktop-calendar-event .ev-when .ev-date { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; font-weight: 700; }
+  .desktop-calendar-event .ev-when .ev-time { font-family: ui-monospace, monospace; font-weight: 700; color: #1a1d23; font-size: 13px; }
+  .desktop-calendar-event .ev-title { font-weight: 600; color: #1a1d23; }
+
+  /* Reminders list */
+  .reminder-list { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+  .reminder-row {
+    display: grid; grid-template-columns: 80px 1fr; gap: 12px; align-items: baseline;
+    padding: 10px 12px; background: #f7f8fa; border: 1px solid #e1e5eb; border-radius: 8px;
+    font-size: 13px;
+  }
+  .reminder-row.fresh { background: #e6f7ec; border-color: #b8e5c8; }
+  .reminder-time { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-weight: 700; color: #1a1d23; }
+  .reminder-note { color: #1a1d23; }
+  .reminder-composer {
+    margin-top: 16px; padding: 14px; background: rgba(40,112,255,0.03);
+    border: 1px dashed rgba(40,112,255,0.3); border-radius: 8px;
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .reminder-composer .composer-label {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--accent); font-weight: 700;
+  }
+  .form-error-banner {
+    background: #fde7e7; border: 1px solid var(--err);
+    color: var(--err); border-radius: 6px;
+    padding: 10px 14px; font-size: 13px; font-weight: 500;
+    display: flex; gap: 8px; align-items: flex-start;
+  }
+  .form-error-banner .icon { font-weight: 700; }
+
+
+  /* Calendar (phone) */
+  .calendar-day-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); margin: 4px 0 10px; font-weight: 600; }
+  .calendar-event {
+    display: grid; grid-template-columns: 70px 1fr; gap: 10px;
+    padding: 10px 12px; background: #fff; border-radius: 10px; border: 1px solid #e1e5eb;
+    margin-bottom: 8px; align-items: baseline; box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+  }
+  .calendar-event .ev-time { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-weight: 700; font-size: 13px; color: #1a1d23; }
+  .calendar-event .ev-title { color: #1a1d23; font-weight: 600; }
+  .calendar-event .ev-meta { font-size: 10px; color: var(--muted); margin-top: 2px; }
+
+  /* Desktop home / wallpaper (visible when no app is focused) */
+  .desktop-home {
+    flex: 1;
+    background:
+      radial-gradient(at 30% 30%, rgba(140,200,255,0.3), transparent 50%),
+      radial-gradient(at 70% 60%, rgba(120,90,220,0.3), transparent 50%),
+      linear-gradient(160deg, #0d2a5a 0%, #1a3a8a 100%);
+    padding: 28px;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+    grid-auto-rows: min-content;
+    gap: 14px 6px;
+    align-content: start;
+  }
+  .desktop-home-icon {
+    display: flex; flex-direction: column; align-items: center; gap: 6px;
+    background: transparent; border: none; padding: 6px;
+    border-radius: 6px; cursor: pointer;
+    color: white;
+  }
+  .desktop-home-icon:hover { background: rgba(255,255,255,0.1); }
+  .desktop-home-icon:focus { outline: 1px dotted rgba(255,255,255,0.6); }
+  .desktop-home-icon[disabled] { cursor: default; }
+  .desktop-home-icon .tile {
+    width: 48px; height: 48px; border-radius: 8px;
+    background: linear-gradient(180deg, #4f8cff 0%, #2e6cdb 100%);
+    display: flex; align-items: center; justify-content: center;
+    color: white; font-weight: 700; font-size: 22px;
+    box-shadow: 0 3px 8px rgba(0,0,0,0.3);
+  }
+  .desktop-home-icon .tile.icon-c { background: linear-gradient(180deg, #e25c5c 0%, #c93f3f 100%); }
+  .desktop-home-icon .tile.icon-p { background: linear-gradient(180deg, #4f8cff 0%, #2e6cdb 100%); }
+  .desktop-home-icon .tile.icon-m { background: linear-gradient(180deg, #2ec27e 0%, #1f8a4a 100%); }
+  .desktop-home-icon .tile.icon-a { background: linear-gradient(180deg, #d4a14c 0%, #b87a18 100%); }
+  .desktop-home-icon .tile.icon-default { background: linear-gradient(180deg, #6e7682 0%, #4a4f57 100%); }
+  .desktop-home-icon .label {
+    font-size: 11px; font-weight: 500; color: white;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.7);
+    text-align: center;
+    max-width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+
+  /* Taskbar buttons (replaces the old top tabs) */
+  .desktop-taskbar-app {
+    background: transparent; border: none; padding: 0 12px;
+    height: 100%; font-size: 11px; color: #cdd5e0; cursor: pointer;
+    display: flex; align-items: center; gap: 6px;
+    border-bottom: 2px solid transparent;
+    font-family: inherit;
+  }
+  .desktop-taskbar-app:hover { background: rgba(255,255,255,0.08); }
+  .desktop-taskbar-app.active { background: rgba(255,255,255,0.12); color: white; border-bottom-color: var(--accent); }
+  .desktop-taskbar-app[disabled] { cursor: default; opacity: 0.7; }
+  .desktop-taskbar-app .dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--accent); opacity: 0.7;
+  }
+  .desktop-show-desktop {
+    margin-left: auto;
+    background: transparent; border: none;
+    border-left: 1px solid rgba(255,255,255,0.15);
+    height: 100%; width: 6px; cursor: pointer; padding: 0;
+    transition: background-color 100ms;
+  }
+  .desktop-show-desktop:hover { background: rgba(255,255,255,0.18); }
+  .desktop-show-desktop:focus { outline: none; background: rgba(255,255,255,0.12); }
+  .desktop-show-desktop[disabled] { cursor: default; }
+
+  /* Start button + Start menu popup */
+  .desktop-taskbar .start {
+    background: transparent; border: none; padding: 0 12px;
+    height: 100%; display: flex; align-items: center;
+    color: var(--accent); font-weight: 700; font-size: 12px;
+    cursor: pointer; font-family: inherit;
+  }
+  .desktop-taskbar .start:hover { background: rgba(40,112,255,0.18); }
+  .desktop-taskbar .start.open { background: rgba(40,112,255,0.28); }
+  .desktop-taskbar .start[disabled] { cursor: default; opacity: 0.7; }
+  .desktop-start-menu {
+    position: absolute; left: 0; bottom: 28px;
+    width: 220px;
+    background: rgba(20, 24, 32, 0.96);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 8px 8px 0 0;
+    padding: 6px 0;
+    box-shadow: 0 -6px 20px rgba(0,0,0,0.45);
+    z-index: 10;
+    display: none;
+  }
+  .desktop-start-menu.open { display: block; }
+  .desktop-start-menu-header {
+    padding: 6px 14px;
+    font-size: 10px; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.08em; font-weight: 700;
+  }
+  .desktop-start-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 6px 12px;
+    width: 100%; text-align: left;
+    background: transparent; border: none; cursor: pointer;
+    color: #cdd5e0; font-size: 13px; font-family: inherit;
+  }
+  .desktop-start-item:hover { background: rgba(255,255,255,0.08); }
+  .desktop-start-item .tile {
+    width: 26px; height: 26px; border-radius: 5px;
+    display: flex; align-items: center; justify-content: center;
+    color: white; font-weight: 700; font-size: 13px;
+    background: linear-gradient(180deg, #4f8cff 0%, #2e6cdb 100%);
+  }
+  .desktop-start-item .tile.icon-c { background: linear-gradient(180deg, #e25c5c 0%, #c93f3f 100%); }
+  .desktop-start-item .tile.icon-p { background: linear-gradient(180deg, #4f8cff 0%, #2e6cdb 100%); }
+  .desktop-start-item .tile.icon-m { background: linear-gradient(180deg, #2ec27e 0%, #1f8a4a 100%); }
+  .desktop-start-item .tile.icon-a { background: linear-gradient(180deg, #d4a14c 0%, #b87a18 100%); }
+  .desktop-start-item .tile.icon-default { background: linear-gradient(180deg, #6e7682 0%, #4a4f57 100%); }
+  .desktop { position: relative; }  /* anchor for the start menu popup */
+
+  /* Chat (desktop) */
+  .chat-channel { font-size: 12px; color: var(--muted); margin: -8px 0 8px; }
+  .chat-thread { display: flex; flex-direction: column; gap: 10px; margin-top: 4px; }
+  .chat-msg { display: grid; grid-template-columns: 80px 1fr; gap: 12px; align-items: baseline; padding: 4px 0; }
+  .chat-msg .sender-col { text-align: right; }
+  .chat-msg .sender { font-weight: 700; font-size: 13px; color: #1a1d23; }
+  .chat-msg .ts { font-size: 10px; color: var(--muted); font-family: ui-monospace, monospace; }
+  .chat-msg .bubble {
+    background: #f0f3f7; border: 1px solid #d0d4da; border-radius: 12px;
+    padding: 10px 14px; font-size: 13px; color: #1a1d23; line-height: 1.45;
+    max-width: 520px;
+  }
+  .chat-msg.from-self .sender { color: var(--accent); }
+  .chat-msg.from-self .bubble { background: rgba(40,112,255,0.1); border-color: rgba(40,112,255,0.3); color: #103a87; }
+
+  .desktop-stage { display: flex; flex-direction: column; gap: 12px; }
+  .desktop-stage .device-label { text-align: left; padding-left: 8px; }
+  .desktop { background: #ebeef2; color: var(--panel-text); border-radius: 8px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.4), 0 1px 0 #d0d4da inset; display: flex; flex-direction: column; min-height: 420px; }
+  .desktop.focused { box-shadow: 0 0 0 3px var(--accent), 0 4px 12px rgba(0,0,0,0.4); }
+  .desktop-titlebar { background: linear-gradient(180deg, #fbfbfd 0%, #eef0f4 100%); border-bottom: 1px solid #d0d4da; padding: 6px 12px; display: flex; align-items: center; gap: 10px; font-size: 12px; color: #2a2f38; user-select: none; }
+  .desktop-titlebar .app-icon { width: 16px; height: 16px; border-radius: 3px; background: var(--accent); color: white; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; }
+  .desktop-titlebar .title { flex: 1; font-weight: 500; }
+  .desktop-titlebar .controls { display: flex; gap: 0; }
+  .desktop-titlebar .controls button { width: 36px; height: 24px; background: transparent; border: none; color: #2a2f38; font-size: 13px; cursor: default; }
+  .desktop-titlebar .controls button.close { color: #c93f3f; }
+  .desktop-window-body { background: #fff; padding: 28px 32px; flex: 1; display: flex; flex-direction: column; gap: 16px; }
+  .desktop-window-body h2 { margin: 0; font-size: 18px; font-weight: 600; color: #1a1d23; }
+  .desktop-window-body .status-text { color: var(--muted); font-size: 13px; margin: -8px 0 6px; }
+  .desktop-window-body .field-row { display: flex; flex-direction: column; gap: 4px; }
+  .desktop-window-body .field-row label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); font-weight: 600; }
+  .desktop-window-body .field-row .input-row { display: flex; gap: 8px; align-items: stretch; }
+  .desktop-window-body .field-row .input-real { flex: 1; background: #f7f8fa; border: 1px solid #d0d4da; border-radius: 6px; padding: 10px 12px; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 14px; color: #1a1d23; min-height: 18px; outline: none; }
+  .desktop-window-body .field-row .input-real:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(40,112,255,0.18); }
+  .desktop-window-body .field-row .paste-btn { background: white; border: 1px solid #d0d4da; border-radius: 6px; padding: 0 14px; font-size: 12px; font-weight: 600; color: #2a2f38; cursor: pointer; }
+  .desktop-window-body .field-row .paste-btn:hover { background: #f0f3f7; }
+  .desktop-window-body .field-row .paste-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .desktop-window-body .button-row { display: flex; gap: 8px; margin-top: 6px; }
+  .desktop-window-body .primary-btn { background: var(--accent); color: white; border: none; border-radius: 6px; padding: 10px 18px; font-size: 13px; font-weight: 600; cursor: pointer; }
+  .desktop-window-body .primary-btn:hover { background: #1e5bd6; }
+  .desktop-window-body .signed-in { background: #e6f7ec; border: 1px solid #b8e5c8; color: var(--ok); border-radius: 6px; padding: 12px 14px; font-weight: 600; text-align: center; }
+  .desktop-taskbar { background: #1f2227; border-top: 1px solid #2a2f38; height: 28px; display: flex; align-items: center; padding: 0 10px; font-size: 11px; color: #a7b0bc; gap: 14px; }
+  .desktop-taskbar .start { color: var(--accent); font-weight: 700; }
+
+  .clipboard-chip { display: inline-flex; align-items: center; gap: 6px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12); border-radius: 12px; padding: 4px 10px; font-size: 11px; color: #cdd5e0; }
+  .clipboard-chip.has-cross { background: rgba(40, 112, 255, 0.18); border-color: var(--accent); color: var(--accent-soft); }
+  .clipboard-chip .val { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-weight: 700; }
+
+  .actions-panel { background: #1f2227; border: 1px solid #353a42; border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; min-height: 200px; }
+  .actions-header { padding: 10px 14px; border-bottom: 1px solid #353a42; font-weight: 600; font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: #a7b0bc; }
+  .actions-list { flex: 1; overflow-y: auto; padding: 4px 0; max-height: 320px; }
+  .action-row { padding: 8px 14px; border-bottom: 1px solid rgba(255,255,255,0.04); font-size: 12px; display: grid; grid-template-columns: 30px 64px 1fr auto; gap: 10px; align-items: baseline; }
+  .action-row .step { color: var(--muted); font-family: ui-monospace, monospace; }
+  .action-row .badge { font-size: 10px; padding: 2px 6px; border-radius: 4px; background: rgba(255,255,255,0.07); color: #a7b0bc; text-align: center; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
+  .action-row .badge.phone { background: rgba(40, 112, 255, 0.2); color: #9dbbff; }
+  .action-row .badge.desktop { background: rgba(184, 122, 24, 0.2); color: #e7c179; }
+  .action-row .descr .type { color: #e6ebf1; font-weight: 600; }
+  .action-row.rejected .descr .type { color: var(--err); }
+  .action-row .descr .target { color: #a7b0bc; }
+  .action-row .descr .value { color: #e7c179; font-family: ui-monospace, monospace; }
+  .action-row .descr .coords { color: #9dbbff; font-family: ui-monospace, monospace; font-size: 11px; }
+  .action-row .descr .key { color: #e7c179; font-family: ui-monospace, monospace; font-size: 11px; }
+  .action-row .descr .err { color: var(--err); font-size: 11px; margin-top: 2px; }
+  .action-row .descr .handoff { color: var(--accent); font-size: 11px; margin-top: 2px; }
+  /* Per-step score-change pills (rightmost column). Up = green, down = red. */
+  .action-row .deltas { display: flex; flex-direction: column; gap: 2px; align-items: flex-end; }
+  .action-row .delta-pill { font-size: 10px; font-family: ui-monospace, monospace; padding: 1px 6px; border-radius: 4px; white-space: nowrap; letter-spacing: 0.02em; }
+  .action-row .delta-pill.up { background: rgba(58, 191, 122, 0.18); color: #7fd9a7; }
+  .action-row .delta-pill.down { background: rgba(239, 83, 80, 0.18); color: #ff9a96; }
+  .action-row .delta-pill .metric-key { color: rgba(255, 255, 255, 0.55); margin-right: 4px; font-weight: 500; }
+  .empty { padding: 24px; color: var(--muted); text-align: center; font-size: 13px; }
+  /* Expandable action-log rows (reveal the step's LLM prompt + response) */
+  .action-detail { border-bottom: 1px solid rgba(255,255,255,0.04); }
+  .action-detail > summary { list-style: none; cursor: pointer; }
+  .action-detail > summary::-webkit-details-marker { display: none; }
+  .action-detail > summary { display: grid; grid-template-columns: 30px 64px 1fr; gap: 10px; align-items: baseline; padding: 8px 14px; }
+  .action-detail > summary:hover { background: rgba(255,255,255,0.04); }
+  .action-detail[open] > summary { background: rgba(40,112,255,0.08); }
+  .action-detail .llm-flag { font-size: 10px; color: var(--accent); opacity: 0.8; }
+  .action-llm-body { padding: 4px 14px 14px; background: rgba(0,0,0,0.18); }
+  .action-llm-body .llm-section { margin-top: 8px; }
+  .action-llm-body .llm-section h5 { margin: 0 0 4px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); font-weight: 700; }
+</style>
+</head>
+<body>
+<header>
+  <h1>PersonalGUI Viewer</h1>
+  <select id="task-select" class="task-select" title="Select task"></select>
+  <span id="agent-chip" class="agent-chip" style="display:none">agent</span>
+  <span class="meta" id="task-meta">connecting…</span>
+  <span class="episode-status running" id="episode-status">running</span>
+  <span class="spacer"></span>
+  <select id="replay-load-select" class="task-select" title="Replay a saved run" style="display:none"></select>
+  <button id="restart-btn" class="done-btn" style="background:transparent;border:1px solid var(--muted);color:var(--muted-soft);display:none">↻ Restart task</button>
+  <button id="done-btn" class="done-btn" disabled>Declare done</button>
+</header>
+<div id="toast" class="toast"></div>
+
+<section class="replay-bar" id="replay-bar" style="display:none">
+  <button class="replay-btn" id="replay-exit" title="Back to live mode" style="width:auto;padding:0 10px">✕ Live</button>
+  <select id="replay-run-select" class="task-select" title="Select a saved run"></select>
+  <button class="replay-btn" id="replay-first" title="First (Home)">⏮</button>
+  <button class="replay-btn" id="replay-prev" title="Previous (←)">◀</button>
+  <span class="replay-step" id="replay-step">step 0 / 0</span>
+  <button class="replay-btn" id="replay-next" title="Next (→)">▶</button>
+  <button class="replay-btn" id="replay-last" title="Last (End)">⏭</button>
+  <input type="range" id="replay-slider" min="0" max="0" value="0" class="replay-slider" />
+  <span class="replay-next-action" id="replay-next-action"></span>
+</section>
+<section class="step-detail" id="step-detail" style="display:none"></section>
+
+<!-- Plan / decomposition panel -->
+<section class="plan-panel" id="plan-panel" style="display:none">
+  <div class="plan-panel-header">
+    <span class="label">Plan</span>
+    <span class="desc" id="plan-desc">Decompose the task: list the subtasks you'll do and which environment handles each one. Submit before acting to lock it in for scoring.</span>
+  </div>
+  <div class="plan-panel-body" id="plan-body">
+    <!-- Edit mode: form. Submitted mode: read-only list. -->
+  </div>
+</section>
+
+<!-- Ground truth + state comparison -->
+<section class="task-panel" id="task-panel" style="display:none">
+  <div class="task-panel-header">
+    <span class="label">Task</span>
+    <span class="request" id="task-request"></span>
+    <span class="id" id="task-id"></span>
+  </div>
+  <div class="task-panel-body">
+    <div class="task-section">
+      <h3>Required subtasks <span class="sub">ground truth</span></h3>
+      <div id="subtask-list"></div>
+    </div>
+    <div class="task-section">
+      <h3>Required handoffs</h3>
+      <div id="handoff-list"></div>
+    </div>
+    <div class="task-section">
+      <h3>Desired final state</h3>
+      <div id="final-state-list"></div>
+    </div>
+  </div>
+</section>
+
+<section class="metrics-banner" id="metrics-banner" style="display:none"></section>
+
+<main>
+  <div class="env-row" id="env-row"></div>
+  <div id="action-row"></div>
+</main>
+
+<script>
+const POLL_MS = 250;
+let interactive = false;
+let episodeComplete = false;
+let lastState = null;
+let planDraft = [{ id: "step_1", description: "", env: "" }];
+let planSubmittedLocally = false;  // tracks whether the page has submitted; server also tracks via has_plan
+let availableEnvs = [];
+let renderedTaskId = null;
+let _lastEnvSigs = {};        // {env_id -> sig string} for skip-when-unchanged re-rendering
+let _lastActionLogLen = -1;   // count of last-rendered action log entries
+let _lastTaskPanelSig = null; // task panel + metrics render signature
+let _lastStepDetailSig = null;// replay step-detail render signature
+let startMenuOpenEnv = null;  // env_id whose start menu is currently open, or null
+
+function escape(s) {
+  if (s == null) return "";
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+function pretty(value) {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "string") return value;
+  if (typeof value === "boolean" || typeof value === "number") return String(value);
+  return JSON.stringify(value);
+}
+
+function showToast(msg, kind) {
+  const t = document.getElementById("toast");
+  t.textContent = msg;
+  t.className = "toast show" + (kind === "err" ? " err" : "");
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => { t.className = "toast"; }, 1800);
+}
+
+async function postJson(path, body) {
+  try {
+    const res = await fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const detail = await res.json().catch(() => ({}));
+      showToast("✗ " + (detail.detail || res.statusText), "err");
+      return null;
+    }
+    return await res.json();
+  } catch (err) {
+    showToast("✗ network error", "err");
+    return null;
+  }
+}
+
+// Serialize all action POSTs through a single promise chain so that, e.g., a typeIntoField
+// call from an input's onblur completes before the clickButton call from the same physical click.
+let _actionChain = Promise.resolve();
+async function postAction(action) {
+  if (episodeComplete) {
+    showToast("episode already complete", "err");
+    return null;
+  }
+  const promise = _actionChain.then(async () => {
+    const data = await postJson("/action", action);
+    if (data && !data.event.accepted) {
+      showToast("✗ " + (data.event.error || "action rejected"), "err");
+    }
+    return data;
+  });
+  _actionChain = promise.catch(() => null);  // keep the chain alive after a failure
+  const result = await promise;
+  poll();
+  return result;
+}
+
+async function selectTask(task_id) {
+  // Reset plan draft + force a full env-row rebuild for the new task's apps.
+  planDraft = [{ id: "step_1", description: "", env: "" }];
+  planSubmittedLocally = false;
+  _lastEnvSigs = {};
+  _lastActionLogLen = -1;
+  startMenuOpenEnv = null;
+  // Wipe env-row so prior tasks' slots don't linger.
+  const envRow = document.getElementById("env-row");
+  if (envRow) envRow.replaceChildren();
+  await postJson("/select_task", { task_id });
+  poll();
+}
+
+async function submitPlan() {
+  const data = await postJson("/decomposition", { subtasks: planDraft });
+  if (data) {
+    planSubmittedLocally = true;
+    showToast("plan submitted");
+    poll();
+  }
+}
+
+function renderPlanForm(submitted, predicted) {
+  const body = document.getElementById("plan-body");
+  if (submitted && predicted) {
+    // Read-only list with live "visited" check
+    let html = `<div class="submitted-list">`;
+    predicted.forEach((p, idx) => {
+      const v = p.visited;
+      const sym = (v === true) ? `<div class="visit done">✓</div>` :
+                  (v === false) ? `<div class="visit">○</div>` :
+                                  `<div class="visit">·</div>`;
+      html += `<div class="plan-submitted-row">
+        <div class="num">${idx + 1}</div>
+        ${sym}
+        <div><span class="item-id">${escape(p.id)}</span> — <span class="item-desc">${escape(p.description) || "<em>(no description)</em>"}</span>
+          <div class="item-route">env: <b>${escape(p.env || "—")}</b></div>
+        </div>
+      </div>`;
+    });
+    html += `</div>`;
+    body.innerHTML = html;
+    return;
+  }
+  let html = "";
+  planDraft.forEach((p, idx) => {
+    const envOptions = ['<option value="">(choose env)</option>']
+      .concat(availableEnvs.map(e => `<option value="${escape(e)}" ${p.env === e ? "selected" : ""}>${escape(e)}</option>`))
+      .join("");
+    html += `<div class="plan-row">
+      <div class="num">${idx + 1}</div>
+      <input type="text" placeholder="subtask id (e.g. read_otp)" value="${escape(p.id)}" oninput="updatePlanField(${idx}, 'id', this.value)" />
+      <input type="text" placeholder="description (what does this subtask do?)" value="${escape(p.description)}" oninput="updatePlanField(${idx}, 'description', this.value)" />
+      <select onchange="updatePlanField(${idx}, 'env', this.value)">${envOptions}</select>
+      <button class="rm-btn" onclick="removePlanRow(${idx})" title="remove">✕</button>
+    </div>`;
+  });
+  html += `<button class="add-btn" onclick="addPlanRow()">+ add subtask</button>`;
+  html += `<button class="submit-btn" onclick="submitPlan()">Submit plan</button>`;
+  body.innerHTML = html;
+}
+
+function updatePlanField(idx, key, value) {
+  if (idx >= 0 && idx < planDraft.length) {
+    planDraft[idx][key] = value;
+  }
+}
+function addPlanRow() {
+  planDraft.push({ id: "step_" + (planDraft.length + 1), description: "", env: "" });
+  renderPlanForm(false, null);
+}
+function removePlanRow(idx) {
+  planDraft.splice(idx, 1);
+  if (planDraft.length === 0) planDraft.push({ id: "step_1", description: "", env: "" });
+  renderPlanForm(false, null);
+}
+
+function checkSymbol(satisfied) {
+  if (satisfied === true) return `<div class="check done">✓</div>`;
+  if (satisfied === false) return `<div class="check fail">○</div>`;
+  return `<div class="check unknown">○</div>`;
+}
+
+function renderSubtasks(subtasks) {
+  if (!subtasks || !subtasks.length) return `<div class="empty">No subtasks defined.</div>`;
+  return subtasks.map(st => {
+    const route = (st.required_env || st.required_app)
+      ? `<div class="item-route">${escape(st.required_env || "?")} <span class="arrow">·</span> ${escape(st.required_app || "?")}</div>`
+      : "";
+    return `<div class="checklist-item">${checkSymbol(st.satisfied)}<div><div><span class="item-id">${escape(st.id)}</span></div><div class="item-desc">${escape(st.description || "")}</div>${route}</div></div>`;
+  }).join("");
+}
+function renderHandoffs(handoffs) {
+  if (!handoffs || !handoffs.length) return `<div class="empty">No handoffs required.</div>`;
+  return handoffs.map(h => {
+    const observed = (h.observed_values && h.observed_values.length)
+      ? `<div class="item-route">observed: ${escape(h.observed_values.map(v => `"${v}"`).join(", "))}</div>` : "";
+    return `<div class="checklist-item">${checkSymbol(h.satisfied)}<div><div><span class="item-id">${escape(h.artifact_type)}</span></div><div class="item-route">${escape(h.from_env)} <span class="arrow">→</span> ${escape(h.to_env)}</div>${observed}</div></div>`;
+  }).join("");
+}
+function renderFinalState(final) {
+  if (!final || !final.length) return `<div class="empty">No final state required.</div>`;
+  return final.map(f => `<div class="final-state-row">${checkSymbol(f.match)}<div><div class="path">${escape(f.path)}</div><div class="compare">expected: <span class="expected">${escape(pretty(f.expected))}</span><br>actual: <span class="actual ${f.match ? "match" : "miss"}">${escape(pretty(f.actual))}</span></div></div></div>`).join("");
+}
+
+function renderMetrics(metrics, complete) {
+  const banner = document.getElementById("metrics-banner");
+  if (!metrics) { banner.style.display = "none"; return; }
+  banner.style.display = "flex";
+  banner.className = "metrics-banner " + (complete && metrics.global_success ? "success" : complete ? "fail" : "");
+  const items = [
+    { k: "Global success", v: metrics.global_success == null ? "—" : (metrics.global_success ? "PASS" : "FAIL"), cls: metrics.global_success ? "ok" : (complete ? "fail" : "") },
+    { k: "Routing accuracy", v: metrics.routing_accuracy == null ? "—" : (metrics.routing_accuracy * 100).toFixed(0) + "%", cls: "" },
+    { k: "Handoff correctness", v: metrics.handoff_correctness == null ? "—" : (metrics.handoff_correctness * 100).toFixed(0) + "%", cls: "" },
+    { k: "Decomposition recall", v: metrics.decomposition_recall == null ? "—" : (metrics.decomposition_recall * 100).toFixed(0) + "%", cls: "" },
+  ];
+  banner.innerHTML = items.map(i => `<div class="metric"><div class="k">${escape(i.k)}</div><div class="v ${i.cls}">${escape(i.v)}</div></div>`).join("");
+}
+
+function renderPhoneApp(env_id, app) {
+  const r = app.render || {};
+  if (r.kind === "authenticator") {
+    const code = r.code_visible || "";
+    const handler = interactive && code ? `onclick="copyOnPhone('${escape(env_id)}', '${escape(code)}', this)"` : "";
+    return `<div class="app-title">${escape(app.display_name)}</div>
+      <div class="copyable-card" ${handler}>
+        <div class="label">One-time code</div>
+        <div class="big">${escape(code || "—")}</div>
+        ${r.hint ? `<div class="sub">${escape(r.hint)}</div>` : ""}
+        ${interactive ? `<div class="copy-cue">Tap to copy</div>` : ""}
+      </div>`;
+  }
+  if (r.kind === "receipt_photo") {
+    const amount = r.amount_visible || "";
+    const handler = interactive && amount ? `onclick="copyOnPhone('${escape(env_id)}', '${escape(amount)}', this)"` : "";
+    return `<div class="app-title">${escape(app.display_name)}</div>
+      <div class="copyable-card" ${handler}>
+        <div class="label">Receipt · ${escape(r.merchant || "")}</div>
+        <div class="big">${escape(amount || "—")}</div>
+        ${r.date ? `<div class="sub">${escape(r.date)}</div>` : ""}
+        ${interactive ? `<div class="copy-cue">Tap to copy amount</div>` : ""}
+      </div>`;
+  }
+  if (r.kind === "calendar") {
+    let html = `<div class="app-title">${escape(app.display_name)}</div>`;
+    html += `<div class="calendar-day-label">${escape(r.title || "Calendar")}</div>`;
+    for (const ev of r.events || []) {
+      const time = ev.time || "";
+      const evTitle = ev.title || "(untitled)";
+      const lastUpdated = ev.last_updated;
+      const handler = interactive && time
+        ? `onclick="copyOnPhone('${escape(env_id)}', '${escape(time)}', this)"`
+        : "";
+      html += `<div class="calendar-event" ${handler} style="${interactive ? "cursor:pointer" : ""}">
+        <div class="ev-time">${escape(time)}</div>
+        <div>
+          <div class="ev-title">${escape(evTitle)}</div>
+          ${lastUpdated ? `<div class="ev-meta">updated ${escape(lastUpdated)}</div>` : ""}
+        </div>
+      </div>`;
+    }
+    return html;
+  }
+  if (r.kind === "chat") {
+    let html = `<div class="phone-chat-header">${escape(r.title || app.display_name)}${r.channel ? ` <span class="phone-chat-channel">· ${escape(r.channel)}</span>` : ""}</div>`;
+    html += `<div class="phone-chat-thread">`;
+    for (const m of r.messages || []) {
+      const fromSelf = (m.sender || "").toLowerCase() === "you";
+      html += `<div class="phone-chat-msg ${fromSelf ? "self" : "other"}">
+        ${!fromSelf ? `<div class="phone-chat-sender">${escape(m.sender || "")}</div>` : ""}
+        <div class="phone-chat-bubble">${escape(m.text || "")}</div>
+        <div class="phone-chat-ts">${escape(m.ts || "")}</div>
+      </div>`;
+    }
+    html += `</div>`;
+    return html;
+  }
+  let html = `<div class="app-title">${escape(app.display_name)}</div>`;
+  for (const [k, v] of Object.entries(r)) {
+    if (k === "kind") continue;
+    html += `<div style="font-size:12px;margin:4px 0"><b>${escape(k)}</b>: ${escape(pretty(v))}</div>`;
+  }
+  return html;
+}
+
+async function copyOnPhone(env_id, value, el) {
+  el.classList.add("copied");
+  setTimeout(() => el.classList.remove("copied"), 600);
+  await postAction({ environment_id: env_id, type: "copy_value", value });
+  showToast(`copied "${value}" on ${env_id}`);
+}
+
+function renderDesktopApp(env_id, env, app) {
+  const r = app.render || {};
+  if (r.kind === "contacts") {
+    let body = `<h2>${escape(r.title || app.display_name)}</h2>`;
+    body += `<div class="contacts-list">`;
+    for (const c of r.contacts || []) {
+      const active = r.focused_contact_id === c.id;
+      const handler = interactive ? `onclick="clickButton('${escape(env_id)}', 'contact:${escape(c.id)}')"` : "";
+      const initial = (c.name || "?").charAt(0).toUpperCase();
+      body += `<div class="contact-row ${active ? "active" : ""}" ${handler}>
+        <div class="avatar">${escape(initial)}</div>
+        <div class="meta">
+          <div class="name">${escape(c.name || "")}</div>
+          ${c.label ? `<div class="label">${escape(c.label)}</div>` : ""}
+          ${c.phone ? `<div class="phone">${escape(c.phone)}</div>` : ""}
+        </div>
+      </div>`;
+    }
+    body += `</div>`;
+    return body;
+  }
+  if (r.kind === "email") {
+    let body = `<h2>${escape(r.title || app.display_name)}</h2>`;
+    const threads = r.threads || [];
+    if (threads.length) {
+      body += `<div class="email-list">`;
+      for (const t of threads) {
+        const active = r.opened_thread_id === t.id;
+        const handler = interactive ? `onclick="clickButton('${escape(env_id)}', 'thread:${escape(t.id)}')"` : "";
+        body += `<div class="email-thread ${active ? "active" : ""}" ${handler}>
+          <div class="sender">${escape(t.sender || "")}</div>
+          <div class="subject">${escape(t.subject || "")}</div>
+          <div class="ts">${escape(t.ts || "")}</div>
+        </div>`;
+      }
+      body += `</div>`;
+    }
+    if (r.opened_thread) {
+      const t = r.opened_thread;
+      body += `<div class="email-body">
+        <div class="meta"><span class="from">${escape(t.sender || "")}</span> · ${escape(t.ts || "")}</div>
+        <div class="subject">${escape(t.subject || "")}</div>
+        <pre>${escape(t.body || "")}</pre>
+      </div>`;
+    }
+    if (r.ooo_supported) {
+      const ooo = r.ooo || {};
+      const enabled = !!ooo.enabled;
+      body += `<div class="ooo-panel ${enabled ? "enabled" : ""}">`;
+      body += `<div class="ooo-label">Out of office ${enabled ? "· enabled" : ""}</div>`;
+      const inputs = [
+        { k: "ooo_start", label: "start", type: "date", v: ooo.start || "" },
+        { k: "ooo_end",   label: "end",   type: "date", v: ooo.end   || "" },
+        { k: "ooo_message", label: "auto-reply", type: "text", v: ooo.message || "" },
+      ];
+      for (const i of inputs) {
+        if (interactive) {
+          body += `<div class="field-row"><label>${escape(i.label)}</label>
+            <input class="input-real" data-env="${escape(env_id)}" data-target="${escape(i.k)}"
+                   type="${escape(i.type)}" value="${escape(i.v)}"
+                   onblur="typeIntoField(this)" placeholder="" /></div>`;
+        } else {
+          body += `<div class="field-row"><label>${escape(i.label)}</label><div class="input-real">${escape(i.v) || '<span style="color:var(--muted)">(empty)</span>'}</div></div>`;
+        }
+      }
+      const toggleHandler = interactive ? `onclick="clickButton('${escape(env_id)}', 'ooo_toggle')"` : "";
+      body += `<div class="button-row"><button class="primary-btn" ${toggleHandler}>${enabled ? "Turn off" : "Turn on"} OOO</button></div>`;
+      body += `</div>`;
+    }
+    return body;
+  }
+  if (r.kind === "document_editor") {
+    let body = `<h2>${escape(r.title || app.display_name)}</h2>`;
+    if (r.status === "saved") {
+      body += `<div class="signed-in">✓ ${escape(r.status_text || "Saved.")}</div>`;
+      body += `<div class="doc-editor"><div class="ro-body">${escape(r.body || "")}</div></div>`;
+      return body;
+    }
+    if (r.last_save_error) {
+      body += `<div class="form-error-banner"><span class="icon">⚠</span><span>${escape(r.last_save_error)}</span></div>`;
+    }
+    if (interactive) {
+      body += `<div class="doc-editor"><textarea class="input-real" data-env="${escape(env_id)}" data-target="body" onblur="typeIntoField(this)">${escape(r.body || "")}</textarea></div>`;
+    } else {
+      body += `<div class="doc-editor"><div class="ro-body">${escape(r.body || "")}</div></div>`;
+    }
+    if (r.buttons && r.buttons.length) {
+      body += `<div class="button-row">${r.buttons.map(b => interactive
+        ? `<button class="primary-btn" onclick="clickButton('${escape(env_id)}', '${escape(b)}')">${escape(b)}</button>`
+        : `<button class="primary-btn">${escape(b)}</button>`).join("")}</div>`;
+    }
+    return body;
+  }
+  if (r.kind === "profile") {
+    let body = `<h2>${escape(r.title || app.display_name)}</h2>`;
+    body += `<div class="profile-card">`;
+    body += `<div class="name">${escape(r.name || "")}</div>`;
+    if (r.last_updated) body += `<div class="updated">Profile updated ${escape(r.last_updated)}</div>`;
+    for (const [k, v] of Object.entries(r.fields || {})) {
+      const handler = interactive ? `onclick="copyOnPhone('${escape(env_id)}', '${escape(v)}', this)"` : "";
+      body += `<div class="field" ${handler}>
+        <div class="k">${escape(k)}</div>
+        <div class="v">${escape(v)}</div>
+      </div>`;
+    }
+    body += `</div>`;
+    if (interactive) body += `<div class="status-text" style="margin-top:10px">Click any field to copy its value.</div>`;
+    return body;
+  }
+  if (r.kind === "editable_calendar") {
+    let body = `<h2>${escape(r.title || app.display_name)}</h2>`;
+    const events = r.events || [];
+    body += `<div class="reminder-list">`;
+    if (events.length === 0) {
+      body += `<div class="empty" style="padding:8px;color:var(--muted)">No events yet.</div>`;
+    } else {
+      for (const ev of events) {
+        body += `<div class="reminder-row">
+          <div class="reminder-time">${escape(ev.time || "—")}</div>
+          <div class="reminder-note">${escape(ev.title || "")}</div>
+        </div>`;
+      }
+    }
+    body += `</div>`;
+    if (r.sync_status === "synced") {
+      body += `<div class="signed-in">✓ ${escape(r.status_text || "Synced.")}</div>`;
+    } else {
+      body += `<div class="reminder-composer">`;
+      body += `<div class="composer-label">${escape(r.status_text || "New event")}</div>`;
+      if (r.last_save_error) {
+        body += `<div class="form-error-banner"><span class="icon">⚠</span><span>${escape(r.last_save_error)}</span></div>`;
+      }
+      const types = r.draft_field_types || {};
+      const placeholders = r.draft_field_placeholders || {};
+      for (const [k, v] of Object.entries(r.draft_fields || {})) {
+        const empty = (v === "" || v == null);
+        const value = empty ? "" : pretty(v);
+        const fieldType = types[k] || "text";
+        const placeholder = placeholders[k] || "(empty)";
+        if (interactive) {
+          const pasteable = env.clipboard != null;
+          body += `<div class="field-row">
+            <label>${escape(k)}<span style="font-size:9px;letter-spacing:0.06em;margin-left:6px;color:var(--muted)">${escape(fieldType)}</span></label>
+            <div class="input-row">
+              <input class="input-real" data-env="${escape(env_id)}" data-target="${escape(k)}"
+                     type="${escape(fieldType)}"
+                     value="${escape(value)}" onblur="typeIntoField(this)" onkeydown="if(event.key==='Enter'){this.blur()}"
+                     placeholder="${escape(placeholder)}" />
+              <button class="paste-btn" onclick="pasteIntoField('${escape(env_id)}', '${escape(k)}')" ${pasteable ? "" : "disabled"}>Paste 📋</button>
+            </div>
+          </div>`;
+        } else {
+          body += `<div class="field-row"><label>${escape(k)}</label><div class="input-real" style="cursor:default">${empty ? '<span style="color:var(--muted);font-style:italic">(empty)</span>' : escape(value)}</div></div>`;
+        }
+      }
+      if (r.buttons && r.buttons.length) {
+        body += `<div class="button-row">${r.buttons.map(b => interactive
+          ? `<button class="primary-btn" onclick="clickButton('${escape(env_id)}', '${escape(b)}')">${escape(b)}</button>`
+          : `<button class="primary-btn" style="cursor:default">${escape(b)}</button>`).join("")}</div>`;
+      }
+      body += `</div>`;
+    }
+    return body;
+  }
+  if (r.kind === "reminders_app") {
+    let body = `<h2>${escape(r.title || app.display_name)}</h2>`;
+    const reminders = r.reminders || [];
+    body += `<div class="reminder-list">`;
+    if (reminders.length === 0) {
+      body += `<div class="empty" style="padding:8px;color:var(--muted)">No reminders yet.</div>`;
+    } else {
+      for (const rem of reminders) {
+        body += `<div class="reminder-row">
+          <div class="reminder-time">${escape(rem.time || "—")}</div>
+          <div class="reminder-note">${escape(rem.note || "")}</div>
+        </div>`;
+      }
+    }
+    body += `</div>`;
+    // Composer for a new reminder
+    const isDone = (r.buttons || []).length === 0;
+    if (isDone && r.status_text) {
+      body += `<div class="signed-in">✓ ${escape(r.status_text)}</div>`;
+    } else {
+      body += `<div class="reminder-composer">`;
+      body += `<div class="composer-label">${escape(r.status_text || "New reminder")}</div>`;
+      if (r.last_save_error) {
+        body += `<div class="form-error-banner"><span class="icon">⚠</span><span>${escape(r.last_save_error)}</span></div>`;
+      }
+      const types = r.draft_field_types || {};
+      const placeholders = r.draft_field_placeholders || {};
+      for (const [k, v] of Object.entries(r.draft_fields || {})) {
+        const empty = (v === "" || v == null);
+        const value = empty ? "" : pretty(v);
+        const fieldType = types[k] || "text";
+        const placeholder = placeholders[k] || "(empty)";
+        if (interactive) {
+          const pasteable = env.clipboard != null;
+          body += `<div class="field-row">
+            <label>${escape(k)}<span style="font-size:9px;letter-spacing:0.06em;margin-left:6px;color:var(--muted)">${escape(fieldType)}</span></label>
+            <div class="input-row">
+              <input class="input-real" data-env="${escape(env_id)}" data-target="${escape(k)}"
+                     type="${escape(fieldType)}"
+                     value="${escape(value)}" onblur="typeIntoField(this)" onkeydown="if(event.key==='Enter'){this.blur()}"
+                     placeholder="${escape(placeholder)}" />
+              <button class="paste-btn" onclick="pasteIntoField('${escape(env_id)}', '${escape(k)}')" ${pasteable ? "" : "disabled"}>Paste 📋</button>
+            </div>
+          </div>`;
+        } else {
+          body += `<div class="field-row"><label>${escape(k)}</label><div class="input-real" style="cursor:default">${empty ? '<span style="color:var(--muted);font-style:italic">(empty)</span>' : escape(value)}</div></div>`;
+        }
+      }
+      if (r.buttons && r.buttons.length) {
+        body += `<div class="button-row">${r.buttons.map(b => interactive
+          ? `<button class="primary-btn" onclick="clickButton('${escape(env_id)}', '${escape(b)}')">${escape(b)}</button>`
+          : `<button class="primary-btn" style="cursor:default">${escape(b)}</button>`).join("")}</div>`;
+      }
+      body += `</div>`;
+    }
+    return body;
+  }
+  if (r.kind === "chat") {
+    let body = `<h2>${escape(r.title || app.display_name)}</h2>`;
+    if (r.channel) body += `<div class="chat-channel">${escape(r.channel)}</div>`;
+    body += `<div class="chat-thread">`;
+    for (const m of r.messages || []) {
+      const fromSelf = (m.sender || "").toLowerCase() === "you";
+      body += `<div class="chat-msg ${fromSelf ? "from-self" : ""}">
+        <div class="sender-col">
+          <div class="sender">${escape(m.sender || "")}</div>
+          <div class="ts">${escape(m.ts || "")}</div>
+        </div>
+        <div class="bubble">${escape(m.text || "")}</div>
+      </div>`;
+    }
+    body += `</div>`;
+    // Compose box (when composable=true)
+    if (r.composable) {
+      const draft = r.draft || "";
+      if (interactive) {
+        const pasteable = env.clipboard != null;
+        body += `<div class="reminder-composer">
+          <div class="composer-label">New message</div>
+          <div class="field-row">
+            <div class="input-row">
+              <input class="input-real" data-env="${escape(env_id)}" data-target="compose"
+                     type="text" value="${escape(draft)}"
+                     onblur="typeIntoField(this)" onkeydown="if(event.key==='Enter'){this.blur()}"
+                     placeholder="Type a message…" />
+              <button class="paste-btn" onclick="pasteIntoField('${escape(env_id)}', 'compose')" ${pasteable ? "" : "disabled"}>Paste 📋</button>
+            </div>
+          </div>
+          <div class="button-row"><button class="primary-btn" onclick="clickButton('${escape(env_id)}', 'send')">Send</button></div>
+        </div>`;
+      } else {
+        body += `<div class="reminder-composer"><div class="composer-label">New message</div><div class="input-real">${escape(draft) || '<span style="color:var(--muted)">(empty)</span>'}</div></div>`;
+      }
+    }
+    return body;
+  }
+  if (r.kind === "calendar") {
+    // Desktop calendar (e.g. signed-in Outlook). Events are clickable to copy the title.
+    let body = `<h2>${escape(r.title || app.display_name)}</h2>`;
+    body += `<div class="desktop-calendar">`;
+    for (const ev of r.events || []) {
+      const title = ev.title || "(untitled)";
+      const time = ev.time || "";
+      const date = ev.date || "";
+      const handler = interactive && title
+        ? `onclick="copyOnPhone('${escape(env_id)}', '${escape(title)}', this)"`
+        : "";
+      body += `<div class="desktop-calendar-event" ${handler} style="${interactive ? "cursor:pointer" : ""}">
+        <div class="ev-when">
+          <div class="ev-date">${escape(date)}</div>
+          <div class="ev-time">${escape(time)}</div>
+        </div>
+        <div class="ev-title">${escape(title)}</div>
+      </div>`;
+    }
+    body += `</div>`;
+    if (interactive) {
+      body += `<div class="status-text" style="margin-top:12px">Click any event to copy its title.</div>`;
+    }
+    return body;
+  }
+  if (r.kind === "form") {
+    const isDone = r.status_text && /signed in|submitted/i.test(r.status_text);
+    let body = `<h2>${escape(r.title || app.display_name)}</h2>`;
+    if (isDone) {
+      body += `<div class="signed-in">✓ ${escape(r.status_text)}</div>`;
+    } else {
+      if (r.status_text) body += `<div class="status-text">${escape(r.status_text)}</div>`;
+      if (r.last_save_error) {
+        body += `<div class="form-error-banner"><span class="icon">⚠</span><span>${escape(r.last_save_error)}</span></div>`;
+      }
+      if (r.fields) {
+        const types = r.field_types || {};
+        const placeholders = r.field_placeholders || {};
+        for (const [k, v] of Object.entries(r.fields)) {
+          const empty = (v === "" || v == null);
+          const value = empty ? "" : pretty(v);
+          const fieldType = types[k] || "text";
+          const placeholder = placeholders[k] || "(empty)";
+          if (interactive) {
+            const pasteable = env.clipboard != null;
+            body += `<div class="field-row">
+              <label>${escape(k)}<span style="font-size:9px;letter-spacing:0.06em;margin-left:6px;color:var(--muted)">${escape(fieldType)}</span></label>
+              <div class="input-row">
+                <input class="input-real" data-env="${escape(env_id)}" data-target="${escape(k)}"
+                       type="${escape(fieldType)}"
+                       value="${escape(value)}" onblur="typeIntoField(this)" onkeydown="if(event.key==='Enter'){this.blur()}"
+                       placeholder="${escape(placeholder)}" />
+                <button class="paste-btn" onclick="pasteIntoField('${escape(env_id)}', '${escape(k)}')" ${pasteable ? "" : "disabled"}>Paste 📋</button>
+              </div>
+            </div>`;
+          } else {
+            body += `<div class="field-row"><label>${escape(k)}<span style="font-size:9px;letter-spacing:0.06em;margin-left:6px;color:var(--muted)">${escape(fieldType)}</span></label><div class="input-real" style="cursor:default">${empty ? '<span style="color:var(--muted);font-style:italic">(empty)</span>' : escape(value)}</div></div>`;
+          }
+        }
+      }
+      if (r.buttons && r.buttons.length) {
+        body += `<div class="button-row">${r.buttons.map(b => interactive
+          ? `<button class="primary-btn" onclick="clickButton('${escape(env_id)}', '${escape(b)}')">${escape(b)}</button>`
+          : `<button class="primary-btn" style="cursor:default">${escape(b)}</button>`).join("")}</div>`;
+      }
+    }
+    return body;
+  }
+  let body = `<h2>${escape(app.display_name)}</h2>`;
+  for (const [k, v] of Object.entries(r)) {
+    if (k === "kind") continue;
+    body += `<div class="field-row"><label>${escape(k)}</label><div class="input-real">${escape(pretty(v))}</div></div>`;
+  }
+  return body;
+}
+
+async function typeIntoField(input) {
+  await postAction({ environment_id: input.dataset.env, type: "type", target: input.dataset.target, value: input.value });
+}
+async function pasteIntoField(env_id, target) { await postAction({ environment_id: env_id, type: "paste_value", target }); }
+async function clickButton(env_id, target) { await postAction({ environment_id: env_id, type: "click", target }); }
+async function declareDone() {
+  const env_id = lastState && lastState.focused_env;
+  if (!env_id) return;
+  await postAction({ environment_id: env_id, type: "declare_done" });
+}
+
+function clipboardChip(env_id, env) {
+  if (env.clipboard == null) return "";
+  const cross = env.clipboard_origin && env.clipboard_origin !== env_id;
+  const fromLabel = cross ? ` (from ${escape(env.clipboard_origin)})` : "";
+  return `<div class="clipboard-chip ${cross ? "has-cross" : ""}">📋 <span class="val">${escape(pretty(env.clipboard))}</span>${fromLabel}</div>`;
+}
+
+function _iconClassForApp(app, app_id) {
+  // Color-code the dock icon by app kind so the user has a visual anchor.
+  const name = (app.display_name || app_id || "").toLowerCase();
+  if (/(chat|message|mail)/.test(name)) return "icon-m";
+  if (/(photo|camera|gallery|receipt)/.test(name)) return "icon-c";
+  if (/(calendar|reminder|clock)/.test(name)) return "icon-p";
+  if (/(auth|wallet|pass)/.test(name)) return "icon-a";
+  return "icon-default";
+}
+
+function renderPhone(env_id, env, isFocused, readOnly) {
+  // readOnly: render with non-interactive apps (used for the Initial pane).
+  const wasInteractive = interactive;
+  if (readOnly) interactive = false;
+  try {
+    const focusedAppId = env.focused_app;
+    const focusedApp = focusedAppId && env.apps[focusedAppId];
+    const entries = Object.entries(env.apps || {});
+    const onHome = !focusedAppId;
+
+    // Body: either the focused app's render or the iOS-style home screen.
+    let bodyHtml;
+    if (onHome) {
+      let grid = `<div class="phone-home-wallpaper"><div class="phone-home-grid">`;
+      for (const [aid, app] of entries) {
+        const handler = interactive ? `onclick="openApp('${escape(env_id)}', '${escape(aid)}')"` : "";
+        const disabled = interactive ? "" : "disabled";
+        const iconClass = _iconClassForApp(app, aid);
+        const letter = (app.display_name || aid).charAt(0).toUpperCase();
+        grid += `<button class="phone-home-icon" ${handler} ${disabled} title="${escape(app.display_name)}">
+          <span class="icon-tile ${iconClass}">${escape(letter)}</span>
+          <span class="icon-label">${escape(app.display_name)}</span>
+        </button>`;
+      }
+      grid += `</div></div>`;
+      bodyHtml = grid;
+    } else {
+      bodyHtml = `<div class="phone-app">${renderPhoneApp(env_id, focusedApp)}</div>`;
+    }
+
+    // App dock: only shown inside an app (the home screen is already an app grid).
+    let dockHtml = "";
+    if (!onHome && entries.length > 0) {
+      dockHtml = `<div class="phone-dock">`;
+      for (const [aid, app] of entries) {
+        const active = aid === focusedAppId;
+        const handler = interactive ? `onclick="openApp('${escape(env_id)}', '${escape(aid)}')"` : "";
+        const disabled = interactive ? "" : "disabled";
+        const iconClass = _iconClassForApp(app, aid);
+        const letter = (app.display_name || aid).charAt(0).toUpperCase();
+        dockHtml += `<button class="phone-dock-app ${iconClass} ${active ? "active" : ""}" ${handler} ${disabled} title="${escape(app.display_name)}">${escape(letter)}</button>`;
+      }
+      dockHtml += `</div>`;
+    }
+
+    const homebarHandler = interactive ? `onclick="goHomePhone('${escape(env_id)}')"` : "";
+    const homebarTitle = onHome ? "" : "Swipe up to go home";
+
+    return `<div class="phone-stage">
+      <div class="device-label ${isFocused ? "focused" : ""}">📱 Mobile · ${escape(env.display_name)}${isFocused ? " · in focus" : ""}</div>
+      <div class="phone ${isFocused ? "focused" : ""}"><div class="phone-screen">
+        <div class="phone-notch"></div>
+        <div class="phone-statusbar"><span>9:41</span><span class="right">●●●●● 5G ▮▮▮</span></div>
+        ${bodyHtml}
+        ${dockHtml}
+        <div class="phone-homebar-zone" data-interactive="${interactive ? '1' : '0'}" ${homebarHandler} title="${escape(homebarTitle)}">
+          <div class="phone-homebar"></div>
+        </div>
+      </div></div>
+      ${readOnly ? "" : clipboardChip(env_id, env)}
+    </div>`;
+  } finally {
+    interactive = wasInteractive;
+  }
+}
+
+// Phone home is the same go-home semantics as the desktop's Show Desktop button.
+const goHomePhone = goHome;
+
+function renderDesktop(env_id, env, isFocused, readOnly) {
+  const wasInteractive = interactive;
+  if (readOnly) interactive = false;
+  try {
+    const focusedAppId = env.focused_app;
+    const focusedApp = focusedAppId && env.apps[focusedAppId];
+    const appEntries = Object.entries(env.apps || {});
+    const onDesktop = !focusedAppId;
+    const dis = interactive ? "" : "disabled";
+
+    // Window body: app contents OR desktop wallpaper (when no app focused)
+    let titlebarHtml = "";
+    let bodyHtml;
+    if (onDesktop) {
+      bodyHtml = `<div class="desktop-home">`;
+      for (const [aid, app] of appEntries) {
+        const iconClass = _iconClassForApp(app, aid);
+        const letter = (app.display_name || aid).charAt(0).toUpperCase();
+        const handler = interactive ? `onclick="openApp('${escape(env_id)}', '${escape(aid)}')"` : "";
+        bodyHtml += `<button class="desktop-home-icon" ${handler} ${dis} title="${escape(app.display_name)}">
+          <span class="tile ${iconClass}">${escape(letter)}</span>
+          <span class="label">${escape(app.display_name)}</span>
+        </button>`;
+      }
+      bodyHtml += `</div>`;
+    } else {
+      const appName = focusedApp.display_name;
+      const iconChar = appName.charAt(0).toUpperCase();
+      titlebarHtml = `<div class="desktop-titlebar">
+        <span class="app-icon">${escape(iconChar)}</span>
+        <span class="title">${escape(appName)} — ${escape(env.display_name)}</span>
+        <span class="controls"><button>—</button><button>▢</button><button class="close">✕</button></span>
+      </div>`;
+      bodyHtml = `<div class="desktop-window-body">${renderDesktopApp(env_id, env, focusedApp)}</div>`;
+    }
+
+    // Taskbar: Start + per-app buttons + spacer + Show Desktop strip
+    const startOpen = startMenuOpenEnv === env_id;
+    const startHandler = interactive ? `onclick="toggleStartMenu('${escape(env_id)}', event)"` : "";
+    let taskbarHtml = `<div class="desktop-taskbar"><button class="start ${startOpen ? "open" : ""}" ${startHandler} ${dis}>⊞ Start</button>`;
+    for (const [aid, app] of appEntries) {
+      const active = aid === focusedAppId;
+      const handler = interactive ? `onclick="openApp('${escape(env_id)}', '${escape(aid)}')"` : "";
+      taskbarHtml += `<button class="desktop-taskbar-app ${active ? "active" : ""}" ${handler} ${dis} title="${escape(app.display_name)}">
+        <span class="dot"></span>${escape(app.display_name)}
+      </button>`;
+    }
+    const showDesktopHandler = interactive ? `onclick="goHome('${escape(env_id)}')"` : "";
+    taskbarHtml += `<button class="desktop-show-desktop" ${showDesktopHandler} ${dis} title="Show desktop"></button></div>`;
+
+    // Start menu popup (positioned relative to .desktop)
+    let startMenuHtml = `<div class="desktop-start-menu ${startOpen ? "open" : ""}">
+      <div class="desktop-start-menu-header">Apps</div>`;
+    for (const [aid, app] of appEntries) {
+      const iconClass = _iconClassForApp(app, aid);
+      const letter = (app.display_name || aid).charAt(0).toUpperCase();
+      const handler = interactive ? `onclick="openAppFromStart('${escape(env_id)}', '${escape(aid)}')"` : "";
+      startMenuHtml += `<button class="desktop-start-item" ${handler}>
+        <span class="tile ${iconClass}">${escape(letter)}</span>${escape(app.display_name)}
+      </button>`;
+    }
+    const showDeskFromStart = interactive ? `onclick="goHomeFromStart('${escape(env_id)}')"` : "";
+    startMenuHtml += `<div class="desktop-start-menu-header" style="margin-top:4px">System</div>
+      <button class="desktop-start-item" ${showDeskFromStart}>
+        <span class="tile icon-default">⊟</span>Show desktop
+      </button>
+    </div>`;
+
+    return `<div class="desktop-stage">
+      <div class="device-label ${isFocused ? "focused" : ""}">🖥️ Desktop · ${escape(env.display_name)}${isFocused ? " · in focus" : ""}</div>
+      <div class="desktop ${isFocused ? "focused" : ""}">
+        ${titlebarHtml}
+        ${bodyHtml}
+        ${startMenuHtml}
+        ${taskbarHtml}
+      </div>
+      ${readOnly ? "" : clipboardChip(env_id, env)}
+    </div>`;
+  } finally {
+    interactive = wasInteractive;
+  }
+}
+
+async function openApp(env_id, app_id) {
+  await postAction({ environment_id: env_id, type: "open_app", target: app_id });
+}
+
+async function goHome(env_id) {
+  await postAction({ environment_id: env_id, type: "open_app", target: null });
+}
+
+function toggleStartMenu(env_id, ev) {
+  if (ev) ev.stopPropagation();
+  startMenuOpenEnv = (startMenuOpenEnv === env_id) ? null : env_id;
+  _lastDesktopSig = null;  // force the next poll to re-render so the menu state updates
+  poll();
+}
+
+function closeStartMenu() {
+  if (startMenuOpenEnv !== null) {
+    startMenuOpenEnv = null;
+    _lastDesktopSig = null;
+    poll();
+  }
+}
+
+async function openAppFromStart(env_id, app_id) {
+  startMenuOpenEnv = null;
+  _lastDesktopSig = null;
+  await openApp(env_id, app_id);
+}
+
+async function goHomeFromStart(env_id) {
+  startMenuOpenEnv = null;
+  _lastDesktopSig = null;
+  await goHome(env_id);
+}
+
+// Close the Start menu when clicking anywhere outside it.
+document.addEventListener("click", (ev) => {
+  if (startMenuOpenEnv === null) return;
+  if (ev.target.closest && (ev.target.closest(".desktop-start-menu") || ev.target.closest(".desktop-taskbar .start"))) {
+    return;  // click was inside the menu or on the Start button (toggle handles it)
+  }
+  closeStartMenu();
+});
+
+function renderActions(log) {
+  if (!log || !log.length) return `<div class="empty">No actions yet.</div>`;
+  return log.map((entry, idx) => {
+    const a = entry.action, e = entry.event;
+    const envKind = (a.environment_id || "").includes("phone") || (a.environment_id || "").includes("android") ? "phone" : "desktop";
+    let descr = `<span class="type">${escape(a.type)}</span>`;
+    if (a.target) descr += ` <span class="target">→ ${escape(a.target)}</span>`;
+    if (a.value != null) descr += ` <span class="value">"${escape(pretty(a.value))}"</span>`;
+    if (a.x != null && a.y != null) descr += ` <span class="coords">@ (${a.x}, ${a.y})</span>`;
+    if (a.key) descr += ` <span class="key">⌨ ${escape(a.key)}</span>`;
+    const resolved = e.state_changes && e.state_changes.resolved_target;
+    if (resolved && resolved !== a.target) {
+      descr += ` <span class="target" style="opacity:0.7">⇒ ${escape(resolved)}</span>`;
+    }
+    if (e.error) descr += `<div class="err">⚠ ${escape(e.error)}</div>`;
+    if (e.handoff && e.handoff.to_env) descr += `<div class="handoff">⇢ handoff ${escape(e.handoff.from_env)} → ${escape(e.handoff.to_env)}: <b>${escape(e.handoff.value)}</b></div>`;
+    const hasMeta = a.meta && a.meta.request;
+    const rowInner = `<div class="step">#${idx + 1}</div><div class="badge ${envKind}">${envKind}</div><div class="descr">${descr}${hasMeta ? ' <span class="llm-flag">🧠 prompt</span>' : ""}</div>${renderDeltaPills(entry.metric_deltas)}`;
+    if (hasMeta) {
+      // Expandable: click the row to reveal the exact prompt + response for this step.
+      return `<details class="action-detail"><summary class="action-row ${e.accepted ? "" : "rejected"}">${rowInner}</summary><div class="action-llm-body">${renderLLMCallInner(a.meta)}</div></details>`;
+    }
+    return `<div class="action-row ${e.accepted ? "" : "rejected"}">${rowInner}</div>`;
+  }).join("");
+}
+
+// Map verifier metric keys to short labels for the per-step delta pills.
+const METRIC_LABELS = {
+  routing_accuracy: "routing",
+  handoff_correctness: "handoff",
+  global_success: "success",
+  boundary_adherence: "boundary",
+  clarification_quality: "clarify",
+  minimal_transfer: "min-xfer",
+  decomposition_recall: "decomp",
+};
+
+function renderDeltaPills(deltas) {
+  if (!deltas) return `<div class="deltas"></div>`;
+  const keys = Object.keys(deltas);
+  if (!keys.length) return `<div class="deltas"></div>`;
+  const pills = keys.map((k) => {
+    const v = deltas[k];
+    if (typeof v !== "number") return "";
+    const up = v >= 0;
+    const sign = up ? "+" : "";
+    const label = METRIC_LABELS[k] || k;
+    return `<span class="delta-pill ${up ? "up" : "down"}"><span class="metric-key">${escape(label)}</span>${sign}${v.toFixed(2)}</span>`;
+  }).filter(Boolean).join("");
+  return `<div class="deltas">${pills}</div>`;
+}
+
+function populateTaskSelect(tasks, currentId) {
+  const sel = document.getElementById("task-select");
+  const opts = [];
+  // Show a placeholder when no task is selected so the dropdown doesn't make the first
+  // task look like it's already loaded. hidden+disabled means the user can't re-select it.
+  if (!currentId) {
+    opts.push(`<option value="" disabled selected hidden>— pick a task —</option>`);
+  }
+  for (const t of tasks || []) {
+    opts.push(`<option value="${escape(t.task_id)}" ${t.task_id === currentId ? "selected" : ""}>${escape(t.task_id)}</option>`);
+  }
+  const joined = opts.join("");
+  if (sel.dataset.signature !== joined) {
+    sel.innerHTML = joined;
+    sel.dataset.signature = joined;
+  }
+}
+
+async function poll() {
+  try {
+    const res = await fetch("/state");
+    const data = await res.json();
+    lastState = data;
+
+    // Task selector
+    if (data.available_tasks) {
+      populateTaskSelect(data.available_tasks, data.task ? data.task.task_id : null);
+    }
+
+    renderReplayLoadPicker(data);
+
+    if (data.status === "idle") {
+      document.getElementById("task-meta").textContent = data.message || "idle";
+      document.getElementById("task-panel").style.display = "none";
+      document.getElementById("plan-panel").style.display = "none";
+      document.getElementById("replay-bar").style.display = "none";
+      return;
+    }
+
+    document.getElementById("task-meta").textContent = `user=${data.task.user}`;
+    document.getElementById("task-request").textContent = data.task.request;
+    document.getElementById("task-id").textContent = data.task.task_id;
+
+    const replay = data.replay || null;
+    interactive = !replay && (!data.current_agent || ["human", "external", "interactive"].includes(data.current_agent));
+    episodeComplete = !!data.episode_complete;
+    renderReplayBar(replay);
+    renderReplayLoadPicker(data);
+
+    // Reset plan draft if task changed
+    if (renderedTaskId !== data.task.task_id) {
+      renderedTaskId = data.task.task_id;
+      planSubmittedLocally = false;
+      planDraft = [{ id: "step_1", description: "", env: "" }];
+    }
+    availableEnvs = Object.keys(data.environments);
+
+    const agentChip = document.getElementById("agent-chip");
+    if (data.current_agent) { agentChip.textContent = data.current_agent; agentChip.style.display = "inline-block"; } else { agentChip.style.display = "none"; }
+
+    const statusEl = document.getElementById("episode-status");
+    if (!episodeComplete) {
+      statusEl.className = "episode-status running"; statusEl.textContent = "running";
+    } else {
+      const ok = data.metrics && data.metrics.global_success;
+      statusEl.className = "episode-status " + (ok ? "complete-ok" : "complete-fail");
+      statusEl.textContent = ok ? "complete · pass" : "complete · fail";
+    }
+
+    const doneBtn = document.getElementById("done-btn");
+    doneBtn.disabled = !interactive || episodeComplete;
+    doneBtn.style.display = interactive ? "inline-block" : "none";
+
+    const restartBtn = document.getElementById("restart-btn");
+    restartBtn.style.display = (interactive && data.task) ? "inline-block" : "none";
+
+    // Plan panel
+    const planPanel = document.getElementById("plan-panel");
+    if (interactive) {
+      planPanel.style.display = "block";
+      const submitted = !!data.has_plan;
+      planPanel.classList.toggle("locked", submitted);
+      // Avoid clobbering an input the user is typing in:
+      const active = document.activeElement;
+      const inPlanInput = active && active.closest && active.closest(".plan-panel");
+      if (!inPlanInput) {
+        renderPlanForm(submitted, data.progress && data.progress.predicted_plan);
+      }
+    } else {
+      planPanel.style.display = "none";
+    }
+
+    // Task panel + metrics: only rebuild when the underlying data changes. Rebuilding
+    // innerHTML every poll thrashes layout and resets scroll position.
+    document.getElementById("task-panel").style.display = "block";
+    const taskPanelSig = JSON.stringify({ p: data.progress, m: data.metrics, c: episodeComplete });
+    if (taskPanelSig !== _lastTaskPanelSig) {
+      document.getElementById("subtask-list").innerHTML = renderSubtasks(data.progress.subtasks);
+      document.getElementById("handoff-list").innerHTML = renderHandoffs(data.progress.required_handoffs);
+      document.getElementById("final-state-list").innerHTML = renderFinalState(data.progress.final_state);
+      renderMetrics(data.metrics, episodeComplete);
+      _lastTaskPanelSig = taskPanelSig;
+    }
+
+    const envs = data.environments;
+    // Order: phones first, then desktops (stable within each group).
+    const envIds = Object.keys(envs).sort((a, b) => {
+      const ka = envs[a].kind === "mobile" ? 0 : 1;
+      const kb = envs[b].kind === "mobile" ? 0 : 1;
+      return ka - kb;
+    });
+
+    const envRow = document.getElementById("env-row");
+    const actionRow = document.getElementById("action-row");
+    const activeEl = document.activeElement;
+
+    // Ensure one .env-slot wrapper per env, in order. Only call replaceChildren when
+    // the layout actually changes — even passing back the same elements, replaceChildren
+    // detaches and re-attaches them, which kills focus on inputs inside.
+    const currentChildren = Array.from(envRow.children);
+    const sameLayout = currentChildren.length === envIds.length
+      && currentChildren.every((c, i) => c.dataset.envId === envIds[i] && c.classList.contains(`kind-${envs[envIds[i]].kind}`));
+    if (!sameLayout) {
+      const existing = new Map();
+      for (const slot of currentChildren) existing.set(slot.dataset.envId, slot);
+      const orderedSlots = envIds.map(id => {
+        let slot = existing.get(id);
+        if (!slot) {
+          slot = document.createElement("div");
+          slot.dataset.envId = id;
+        }
+        slot.className = `env-slot kind-${envs[id].kind}`;
+        return slot;
+      });
+      envRow.replaceChildren(...orderedSlots);
+    }
+
+    // Update each slot conditionally: skip if state unchanged OR if an input inside
+    // it currently has focus (let the user finish typing/picking before re-render).
+    const newEnvSigs = {};
+    for (const env_id of envIds) {
+      const env = envs[env_id];
+      const focused = data.focused_env === env_id;
+      const sig = JSON.stringify({ env, focused, interactive, startOpen: startMenuOpenEnv === env_id });
+      newEnvSigs[env_id] = sig;
+      if (sig === _lastEnvSigs[env_id]) continue;
+      const slot = envRow.querySelector(`.env-slot[data-env-id="${env_id}"]`);
+      if (!slot) continue;
+      const focusInside = !!(activeEl && activeEl.classList && activeEl.classList.contains("input-real") && slot.contains(activeEl));
+      if (focusInside) continue;
+      slot.innerHTML = env.kind === "mobile"
+        ? renderPhone(env_id, env, focused, false)
+        : renderDesktop(env_id, env, focused, false);
+    }
+    _lastEnvSigs = newEnvSigs;
+
+    // Action log row (cheap; refresh whenever the count changes).
+    const currentLen = (data.action_log || []).length;
+    if (!actionRow.querySelector(".actions-panel")) {
+      actionRow.innerHTML = `<div class="actions-panel"><div class="actions-header">Action log</div><div class="actions-list">${renderActions(data.action_log)}</div></div>`;
+      _lastActionLogLen = currentLen;
+    } else if (currentLen !== _lastActionLogLen) {
+      actionRow.querySelector(".actions-list").innerHTML = renderActions(data.action_log);
+      _lastActionLogLen = currentLen;
+    }
+  } catch (err) {
+    document.getElementById("task-meta").textContent = "disconnected — retrying…";
+  }
+}
+
+document.getElementById("done-btn").addEventListener("click", declareDone);
+document.getElementById("task-select").addEventListener("change", (e) => {
+  if (e.target.value) selectTask(e.target.value);  // ignore the placeholder option
+});
+document.getElementById("restart-btn").addEventListener("click", () => {
+  if (lastState && lastState.task) selectTask(lastState.task.task_id);
+});
+
+// ---- Replay controls ----
+let _replayState = null;  // mirror of data.replay for the control handlers
+
+async function replayLoad(file) { await postJson("/replay/load", { file }); _lastEnvSigs = {}; _lastActionLogLen = -1; poll(); }
+async function replaySeek(step) { await postJson("/replay/seek", { step }); poll(); }
+async function replayExit() { await postJson("/replay/exit", {}); _lastEnvSigs = {}; _lastActionLogLen = -1; _replayState = null; poll(); }
+
+function renderReplayLoadPicker(data) {
+  // Header "replay a run" dropdown — shown in live mode when saved runs exist.
+  const sel = document.getElementById("replay-load-select");
+  const runs = data.available_replays || [];
+  const inReplay = !!data.replay;
+  if (inReplay || runs.length === 0) { sel.style.display = "none"; return; }
+  sel.style.display = "inline-block";
+  const opts = ['<option value="" disabled selected hidden>▶ replay a run…</option>']
+    .concat(runs.map(r => `<option value="${escape(r.file)}">${escape(r.agent)} · ${escape(r.task_id)}</option>`))
+    .join("");
+  if (sel.dataset.sig !== opts) { sel.innerHTML = opts; sel.dataset.sig = opts; }
+}
+
+function renderReplayBar(replay) {
+  const bar = document.getElementById("replay-bar");
+  if (!replay) {
+    bar.style.display = "none";
+    document.getElementById("step-detail").style.display = "none";
+    _replayState = null;
+    return;
+  }
+  _replayState = replay;
+  bar.style.display = "flex";
+  document.getElementById("done-btn").style.display = "none";
+  document.getElementById("restart-btn").style.display = "none";
+  document.getElementById("plan-panel").style.display = "none";
+
+  // Run picker
+  const sel = document.getElementById("replay-run-select");
+  const opts = (replay.runs || []).map(r =>
+    `<option value="${escape(r.file)}" ${r.file === replay.loaded_file ? "selected" : ""}>${escape(r.agent)} · ${escape(r.task_id)}</option>`
+  ).join("");
+  if (sel.dataset.sig !== opts) { sel.innerHTML = opts; sel.dataset.sig = opts; }
+
+  const step = replay.step, total = replay.total;
+  document.getElementById("replay-step").textContent = `step ${step} / ${total}`;
+  document.getElementById("replay-first").disabled = step <= 0;
+  document.getElementById("replay-prev").disabled = step <= 0;
+  document.getElementById("replay-next").disabled = step >= total;
+  document.getElementById("replay-last").disabled = step >= total;
+
+  const slider = document.getElementById("replay-slider");
+  slider.max = String(total);
+  if (document.activeElement !== slider) slider.value = String(step);
+
+  const na = document.getElementById("replay-next-action");
+  if (replay.next_action) {
+    const a = replay.next_action;
+    let d = `<b>${escape(a.type)}</b>`;
+    if (a.target) d += ` ${escape(a.target)}`;
+    if (a.value != null) d += ` ${escape(JSON.stringify(a.value))}`;
+    if (a.x != null) d += ` @(${a.x},${a.y})`;
+    if (a.key) d += ` key=${escape(a.key)}`;
+    na.innerHTML = `next ▶ ${d} <span style="opacity:0.6">(${escape(a.environment_id)})</span>`;
+  } else {
+    const m = replay.final_metrics || {};
+    na.innerHTML = `<span style="opacity:0.7">end of run · final global_success=${m.global_success}</span>`;
+  }
+  renderStepDetail(replay);
+}
+
+function renderStepDetail(replay) {
+  const panel = document.getElementById("step-detail");
+  // Skip rebuild when the step hasn't changed (avoids resetting scroll inside blobs).
+  const sig = `${replay.loaded_file}#${replay.step}`;
+  if (sig === _lastStepDetailSig && panel.style.display !== "none") return;
+  _lastStepDetailSig = sig;
+  const rec = replay.current_record;
+  if (!rec) {
+    // End of run — nothing pending. Show a closing note.
+    panel.style.display = "grid";
+    const m = replay.final_metrics || {};
+    const tb = m.terminated_by === "max_steps" ? "⏱ hit max_steps" : "declared done";
+    panel.innerHTML = `<div class="empty-step">End of trajectory · ${escape(tb)} after ${m.steps_used != null ? m.steps_used : replay.total} steps. ` +
+      `Final: global_success=${m.global_success}, routing=${m.routing_accuracy}, handoff=${m.handoff_correctness}. Use ◀ / slider to step back.</div>`;
+    return;
+  }
+  panel.style.display = "grid";
+  const obs = rec.observation || {};
+  const a = rec.action || {};
+  const e = rec.event || {};
+
+  // INPUT — what the agent observed before deciding
+  let inputHtml = `<div class="step-col input"><h4>① Input · what the agent saw</h4><div class="kv">`;
+  inputHtml += `<span class="k">env</span><span class="v">${escape(obs.environment_id || "—")}</span>`;
+  inputHtml += `<span class="k">app</span><span class="v">${escape(obs.app_id || "(home)")}</span>`;
+  if (obs.clipboard_preview != null) inputHtml += `<span class="k">clipboard</span><span class="v">${escape(JSON.stringify(obs.clipboard_preview))}</span>`;
+  inputHtml += `</div>`;
+  if (obs.visible_state) inputHtml += `<div class="blob">${escape(JSON.stringify(obs.visible_state, null, 1))}</div>`;
+  inputHtml += `</div>`;
+
+  // ACTION — the agent's decision
+  let actionHtml = `<div class="step-col action"><h4>② Action · the agent's decision</h4><div class="kv">`;
+  actionHtml += `<span class="k">type</span><span class="v">${escape(a.type || "")}</span>`;
+  actionHtml += `<span class="k">env</span><span class="v">${escape(a.environment_id || "")}</span>`;
+  if (a.target != null) actionHtml += `<span class="k">target</span><span class="v">${escape(a.target)}</span>`;
+  if (a.value != null) actionHtml += `<span class="k">value</span><span class="v">${escape(JSON.stringify(a.value))}</span>`;
+  if (a.x != null) actionHtml += `<span class="k">xy</span><span class="v">(${a.x}, ${a.y})</span>`;
+  if (a.key != null) actionHtml += `<span class="k">key</span><span class="v">${escape(a.key)}</span>`;
+  actionHtml += `</div></div>`;
+
+  // RESULT — environment response
+  const accepted = !!e.accepted;
+  let resultHtml = `<div class="step-col result ${accepted ? "" : "rejected"}"><h4>③ Result · environment response</h4><div class="kv">`;
+  resultHtml += `<span class="k">accepted</span><span class="v"><span class="pill ${accepted ? "ok" : "err"}">${accepted ? "accepted" : "rejected"}</span></span>`;
+  if (e.error) resultHtml += `<span class="k">error</span><span class="v">${escape(e.error)}</span>`;
+  if (e.handoff && e.handoff.to_env) resultHtml += `<span class="k">handoff</span><span class="v">${escape(e.handoff.from_env)} → ${escape(e.handoff.to_env)}: ${escape(JSON.stringify(e.handoff.value))}</span>`;
+  resultHtml += `</div>`;
+  if (e.state_changes && Object.keys(e.state_changes).length) {
+    resultHtml += `<div class="blob">${escape(JSON.stringify(e.state_changes, null, 1))}</div>`;
+  }
+  resultHtml += `</div>`;
+
+  panel.innerHTML = inputHtml + actionHtml + resultHtml + renderLLMCall(a.meta);
+}
+
+function renderLLMCallInner(meta) {
+  const req = meta.request || {}, resp = meta.response || {};
+  let msgs = "";
+  for (const m of req.messages || []) {
+    let content = "";
+    if (typeof m.content === "string") content = m.content;
+    else if (m.content != null) content = JSON.stringify(m.content);
+    let tc = "";
+    if (m.tool_calls) tc = m.tool_calls.map(c => `→ ${c.function.name}(${c.function.arguments})`).join("\n");
+    const blob = [content, tc].filter(Boolean).join("\n");
+    msgs += `<div class="llm-msg"><span class="role role-${escape(m.role)}">${escape(m.role)}</span><pre>${escape(blob || "(empty)")}</pre></div>`;
+  }
+  const toolNames = (req.tools || []).map(t => (t.function ? t.function.name : "?")).join(", ");
+  let respBlob = "";
+  if (resp.content) respBlob += resp.content;
+  if (resp.tool_calls) {
+    if (respBlob) respBlob += "\n";
+    respBlob += resp.tool_calls.map(c => `${c.function.name}(${c.function.arguments})`).join("\n");
+  }
+  return `
+    <div class="llm-section"><h5>Response (raw)</h5><pre class="resp-pre">${escape(respBlob || "(no tool call)")}</pre></div>
+    <div class="llm-section"><h5>Prompt — messages sent</h5>${msgs}</div>
+    <div class="llm-section"><h5>Prompt — tools available</h5><pre>${escape(toolNames)}</pre></div>`;
+}
+
+function renderLLMCall(meta) {
+  // Only LLM-agent actions carry meta. Scripted agents won't have it.
+  if (!meta || !meta.request) return "";
+  const req = meta.request;
+  return `
+    <details class="llm-call" open>
+      <summary>🧠 LLM call · ${escape(req.model || "model")} · ${(req.messages || []).length} messages, ${(req.tools || []).length} tools</summary>
+      ${renderLLMCallInner(meta)}
+    </details>`;
+}
+
+document.getElementById("replay-load-select").addEventListener("change", (e) => { if (e.target.value) replayLoad(e.target.value); });
+document.getElementById("replay-exit").addEventListener("click", replayExit);
+document.getElementById("replay-run-select").addEventListener("change", (e) => { if (e.target.value) replayLoad(e.target.value); });
+document.getElementById("replay-first").addEventListener("click", () => replaySeek(0));
+document.getElementById("replay-prev").addEventListener("click", () => { if (_replayState) replaySeek(_replayState.step - 1); });
+document.getElementById("replay-next").addEventListener("click", () => { if (_replayState) replaySeek(_replayState.step + 1); });
+document.getElementById("replay-last").addEventListener("click", () => { if (_replayState) replaySeek(_replayState.total); });
+document.getElementById("replay-slider").addEventListener("change", (e) => replaySeek(parseInt(e.target.value, 10)));
+document.addEventListener("keydown", (e) => {
+  if (!_replayState) return;
+  if (document.activeElement && document.activeElement.tagName === "INPUT" && document.activeElement.type !== "range") return;
+  if (e.key === "ArrowLeft")  { replaySeek(_replayState.step - 1); e.preventDefault(); }
+  if (e.key === "ArrowRight") { replaySeek(_replayState.step + 1); e.preventDefault(); }
+  if (e.key === "Home")       { replaySeek(0); e.preventDefault(); }
+  if (e.key === "End")        { replaySeek(_replayState.total); e.preventDefault(); }
+});
+
+setInterval(poll, POLL_MS);
+poll();
+</script>
+</body>
+</html>
