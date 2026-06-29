@@ -20,10 +20,10 @@ Run with no --task to start at the picker, or with --task to jump straight in:
     uv run python scripts/run_interactive.py --task receipt_amount_v0_01
 """
 
-from __future__ import annotations
-
 import argparse
+from argparse import Namespace
 import json
+from json import JSONDecodeError
 import sys
 import time
 from pathlib import Path
@@ -47,33 +47,24 @@ def _scan_runs(results_base: Path) -> list[dict[str, str]]:
                 continue
             try:
                 data = json.loads(p.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
+            except (OSError, JSONDecodeError):
                 continue
-            if "log" not in data or "task_id" not in data:
+            if 'log' not in data or 'task_id' not in data:
                 continue
             agent = p.stem.split("__", 1)[0]
             runs.append({
-                "file": str(p.resolve()),
-                "agent": f"{run_dir.name}/{agent}",
-                "task_id": data["task_id"],
+                'file': str(p.resolve()),
+                'agent': f'{run_dir.name}/{agent}',
+                'task_id': data['task_id'],
             })
     return runs
 
 
-def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run PersonalGUI in interactive mode (no in-process agent).")
-    parser.add_argument("--viz-port", type=int, default=8765)
-    parser.add_argument(
-        "--task",
-        choices=sorted(TASK_REGISTRY.keys()),
-        default=None,
-        help=f"Preselect a task. Default: leave on picker. Available: {sorted(TASK_REGISTRY.keys())}",
-    )
-    parser.add_argument(
-        "--driver",
-        default="human",
-        help="Label shown in the viewer for who is driving (e.g. human, external, ui-tars). Default: human.",
-    )
+def _parse_args() -> Namespace:
+    parser = argparse.ArgumentParser(description='Run PersonalGUI in interactive mode (no in-process agent).')
+    parser.add_argument('--viz-port', type=int, default=8765)
+    parser.add_argument('--task', choices=sorted(TASK_REGISTRY.keys()), default=None, help=f'Preselect a task. Default: leave on picker. Available: {sorted(TASK_REGISTRY.keys())}',)
+    parser.add_argument('--driver', default='human', help='Label shown in the viewer for who is driving (e.g. human, external, ui-tars). Default: human.',)
     return parser.parse_args()
 
 
@@ -88,20 +79,20 @@ def main() -> None:
 
     if args.task is not None:
         viewer.attach_to_task(args.task)
-        print(f"[interactive] task={args.task}")
+        print(f'[interactive] task={args.task}')
     else:
-        print(f"[interactive] no task selected; pick one in the browser ({len(TASK_REGISTRY)} available)")
-    print(f"[interactive] driver={args.driver}")
-    print(f"[interactive] {len(runs)} saved run(s) available for replay")
-    print(f"[interactive] open http://localhost:{args.viz_port}/")
-    print("[interactive] Ctrl-C to exit.")
+        print(f'[interactive] no task selected; pick one in the browser ({len(TASK_REGISTRY)} available)')
+    print(f'[interactive] driver={args.driver}')
+    print(f'[interactive] {len(runs)} saved run(s) available for replay')
+    print(f'[interactive] open http://localhost:{args.viz_port}/')
+    print('[interactive] Ctrl-C to exit.')
 
     try:
         while True:
             time.sleep(60)
     except KeyboardInterrupt:
-        print("\n[interactive] shutting down.")
+        print('\n[interactive] shutting down.')
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

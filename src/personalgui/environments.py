@@ -9,6 +9,17 @@ from .handoff import HandoffBuffer
 from .schemas import Action, EnvironmentSpec, Event, Observation
 
 
+class Clock:
+    """Logical clock: advances exactly one tick per environment step (one agent action,
+    including an explicit ``wait``). Time-varying apps read ``tick`` to compute state that
+    evolves on its own — codes refresh, OTPs expire, deadlines approach — independent of
+    which action the agent takes. The world is not waiting for the agent: delay itself
+    changes the problem. Wall-clock-free, so episodes stay deterministic and replayable."""
+
+    def __init__(self) -> None:
+        self.tick = 0
+
+
 def _hit_test(bounds: list[dict[str, Any]], x: float, y: float) -> dict[str, Any] | None:
     """Return the FIRST bounds entry containing (x, y), or None. Bounds are dicts with
     x, y, w, h keys (logical pixels)."""
@@ -20,11 +31,13 @@ def _hit_test(bounds: list[dict[str, Any]], x: float, y: float) -> dict[str, Any
 
 
 class Environment:
-    def __init__(self, spec: EnvironmentSpec, handoff: HandoffBuffer) -> None:
+    def __init__(self, spec: EnvironmentSpec, handoff: HandoffBuffer, clock: Clock) -> None:
         self.id = spec.id
         self.display_name = spec.display_name
         self.kind = spec.kind
         self.apps: dict[str, App] = {a.id: build_app(a) for a in spec.apps}
+        for app in self.apps.values():
+            app.bind_clock(clock)
         self.focused_app: str | None = spec.initial_focus_app
         # Within the focused app, which input element has the keyboard focus.
         # Set by mouse_click on an input or by a semantic "type" action.
@@ -149,6 +162,11 @@ class Environment:
         if action.type == "ask_clarification":
             return Event(action=action, accepted=True)
 
+        if action.type == "wait":
+            # A deliberate no-op. It still consumes a tick (advanced by EnvironmentSet),
+            # so the exogenous world keeps moving — "do nothing" is a real action here.
+            return Event(action=action, accepted=True, state_changes={"waited": True})
+
         if not self.focused_app:
             return Event(action=action, accepted=False, error="no app focused")
         app = self.apps[self.focused_app]
@@ -159,8 +177,9 @@ class Environment:
 class EnvironmentSet:
     def __init__(self, specs: list[EnvironmentSpec], initial_focus_env: str) -> None:
         self.handoff = HandoffBuffer()
+        self.clock = Clock()
         self.environments: dict[str, Environment] = {
-            spec.id: Environment(spec, self.handoff) for spec in specs
+            spec.id: Environment(spec, self.handoff, self.clock) for spec in specs
         }
         if initial_focus_env not in self.environments:
             raise ValueError(f"initial_focus_env {initial_focus_env} not in environments")
@@ -173,11 +192,13 @@ class EnvironmentSet:
     def step(self, action: Action) -> Event:
         if action.environment_id not in self.environments:
             event = Event(action=action, accepted=False, error=f"unknown env {action.environment_id}")
-            self._notify(action, event)
-            return event
-        if action.environment_id != self.focused_env:
-            self.focused_env = action.environment_id
-        event = self.environments[action.environment_id].step(action)
+        else:
+            if action.environment_id != self.focused_env:
+                self.focused_env = action.environment_id
+            event = self.environments[action.environment_id].step(action)
+        # Every agent action consumes one tick — the action is applied at the current tick,
+        # then the logical clock advances so the next observation reflects the moved world.
+        self.clock.tick += 1
         self._notify(action, event)
         return event
 

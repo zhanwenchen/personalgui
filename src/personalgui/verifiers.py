@@ -205,6 +205,39 @@ class MinimalTransferVerifier:
         }
 
 
+class ValidityWindowVerifier:
+    """For time-based credential tasks: was the submitted code still valid at submit time?
+
+    The consuming form tags each submit event's state_changes with `submitted_code_status`
+    ('current' | 'expired' | 'wrong'). This metric scores how the agent handled the validity
+    window — a control property with no terminal-bench analog, since a stale read only goes
+    wrong when the environment's own clock moves on.
+
+      1.0  = succeeded with a current code and never submitted an expired one (clean just-in-time)
+      0.5  = eventually succeeded, but submitted an expired code at least once (recovered late)
+      0.0  = submitted at least one code, but never a current one
+      None = no time-based submission happened (metric inapplicable)
+    """
+
+    name = "validity_window"
+
+    def run(self, task, final_state, log, handoff_events):
+        statuses = []
+        for rec in log:
+            changes = (rec.get("event") or {}).get("state_changes")
+            if isinstance(changes, dict) and changes.get("submitted_code_status"):
+                statuses.append(changes["submitted_code_status"])
+        if not statuses:
+            return {"validity_window": None, "validity_window_details": None}
+        succeeded = "current" in statuses
+        expired = statuses.count("expired")
+        score = 1.0 if (succeeded and expired == 0) else 0.5 if succeeded else 0.0
+        return {
+            "validity_window": score,
+            "validity_window_details": {"submissions": statuses, "expired_attempts": expired},
+        }
+
+
 DEFAULT_VERIFIERS: list[Verifier] = [
     GlobalSuccessVerifier(),
     RoutingAccuracyVerifier(),
@@ -212,4 +245,5 @@ DEFAULT_VERIFIERS: list[Verifier] = [
     BoundaryAdherenceVerifier(),
     ClarificationQualityVerifier(),
     MinimalTransferVerifier(),
+    ValidityWindowVerifier(),
 ]

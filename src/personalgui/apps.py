@@ -5,9 +5,23 @@ Hidden fields (e.g. expense_portal.expected_code) live in state but are excluded
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .schemas import AppSpec
+
+if TYPE_CHECKING:
+    from .environments import Clock
+
+
+def totp_at(tick: int, codes: list[str], period: int) -> str:
+    """The code valid at ``tick`` for a TOTP-style schedule: ``codes`` cycles, advancing one
+    entry every ``period`` ticks. The authenticator and the server share the schedule, so both
+    independently agree on the current code — and a code read in one window is wrong in the
+    next."""
+    if not codes:
+        return ""
+    period = max(int(period), 1)
+    return codes[(tick // period) % len(codes)]
 
 
 class App:
@@ -15,6 +29,16 @@ class App:
         self.id = id
         self.display_name = display_name
         self.state: dict[str, Any] = dict(initial_state)
+        self._clock: "Clock | None" = None
+
+    def bind_clock(self, clock: "Clock") -> None:
+        """Attach the shared logical clock. Time-varying apps read ``self.tick``; static apps
+        simply ignore it."""
+        self._clock = clock
+
+    @property
+    def tick(self) -> int:
+        return self._clock.tick if self._clock is not None else 0
 
     def render(self) -> dict[str, Any]:
         raise NotImplementedError
@@ -38,12 +62,84 @@ class App:
 
 
 class MockAuthenticatorApp(App):
+    """Phone authenticator. By default shows a copyable one-time code.
+
+    Optional enrollment mode (when initial_state carries `expected_setup_key`): the app also
+    renders a setup-key input + enroll button, accepting a key pasted FROM another device
+    (a reverse desktop -> phone handoff). enroll_status flips to "enrolled" on a match.
+    """
+
     def render(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "kind": "authenticator",
             "title": "Authenticator",
             "code_visible": self.state.get("otp_code", ""),
             "hint": "Copy the code to use it on another device.",
+            "element_bounds": self.element_bounds(),
+        }
+        if "expected_setup_key" in self.state:
+            out["enroll_status"] = self.state.get("enroll_status", "unenrolled")
+            out["setup_key_field"] = self.state.get("setup_key_field", "")
+            out["enroll_buttons"] = (
+                ["enroll"] if self.state.get("enroll_status") != "enrolled" else []
+            )
+            out["last_save_error"] = self.state.get("last_save_error")
+        return out
+
+    def element_bounds(self) -> list[dict[str, Any]]:
+        bounds: list[dict[str, Any]] = [
+            {
+                "target": "otp_code",
+                "kind": "copyable",
+                "value": self.state.get("otp_code", ""),
+                "x": 10, "y": 40, "w": 228, "h": 120,
+            },
+        ]
+        if "expected_setup_key" in self.state and self.state.get("enroll_status") != "enrolled":
+            bounds += [
+                {"target": "setup_key", "kind": "input", "x": 10, "y": 180, "w": 228, "h": 44},
+                {"target": "enroll", "kind": "button", "x": 10, "y": 244, "w": 100, "h": 40},
+            ]
+        return bounds
+
+    def handle_action(self, action_type, target, value):
+        if action_type == "view":
+            return True, None, {}
+        if "expected_setup_key" in self.state:
+            if action_type == "type" and target == "setup_key":
+                old = self.state.get("setup_key_field", "")
+                self.state["setup_key_field"] = value or ""
+                self.state.pop("last_save_error", None)
+                return True, None, {"setup_key_field": [old, self.state["setup_key_field"]]}
+            if action_type in ("click", "tap") and target == "enroll":
+                if self.state.get("enroll_status") == "enrolled":
+                    return False, "already enrolled", {}
+                if self.state.get("setup_key_field") == self.state.get("expected_setup_key"):
+                    self.state["enroll_status"] = "enrolled"
+                    self.state.pop("last_save_error", None)
+                    return True, None, {"enroll_status": ["unenrolled", "enrolled"]}
+                err = "Setup key is incorrect."
+                self.state["last_save_error"] = err
+                return True, err, {"last_save_error_set": err}
+        return False, f"authenticator does not support action {action_type}", {}
+
+
+class MockTotpAuthenticatorApp(App):
+    """Time-based authenticator. The visible code refreshes every ``period`` logical ticks,
+    cycling through ``codes`` (both kept in state, hidden from render). The agent only ever
+    sees the CURRENT code plus a countdown — never the schedule or future codes. A code copied
+    now goes stale once the window rolls over, so the agent must carry it to the consuming form
+    within the validity window. This is the exogenous-state hazard: waiting or detouring lets
+    the code expire even though the agent 'did nothing' to it."""
+
+    def render(self) -> dict[str, Any]:
+        period = max(int(self.state.get("period", 1)), 1)
+        return {
+            "kind": "authenticator",
+            "title": "Authenticator",
+            "code_visible": totp_at(self.tick, self.state.get("codes", []), period),
+            "expires_in_ticks": period - (self.tick % period),
+            "hint": f"This code refreshes every {period} ticks — use it before it expires.",
             "element_bounds": self.element_bounds(),
         }
 
@@ -52,7 +148,7 @@ class MockAuthenticatorApp(App):
             {
                 "target": "otp_code",
                 "kind": "copyable",
-                "value": self.state.get("otp_code", ""),
+                "value": totp_at(self.tick, self.state.get("codes", []), self.state.get("period", 1)),
                 "x": 10, "y": 40, "w": 228, "h": 120,
             },
         ]
@@ -60,7 +156,7 @@ class MockAuthenticatorApp(App):
     def handle_action(self, action_type, target, value):
         if action_type == "view":
             return True, None, {}
-        return False, f"authenticator does not support action {action_type}", {}
+        return False, f"totp authenticator does not support action {action_type}", {}
 
 
 class MockExpensePortalApp(App):
@@ -692,21 +788,43 @@ class MockBrowserFormApp(App):
         if action_type in ("click", "tap") and target == "submit":
             if self.state.get("status") == "submitted":
                 return False, "already submitted", {}
-            expected = self.state.get("expected_fields", {})
+            expected = dict(self.state.get("expected_fields", {}))
             fields = self.state.get("fields", {})
-            mismatches = [k for k, want in expected.items() if fields.get(k, "") != want]
+            # Time-based field (optional): validated against the code valid at the CURRENT
+            # tick, not a fixed value. A code from a past window is reported as `expired`
+            # (distinct from plain `wrong`) so verifiers can tell "acted on stale data" apart
+            # from a typo. Both still block the submit, like a real TOTP server.
+            totp_field = self.state.get("totp_field")
+            code_status: str | None = None
+            if totp_field:
+                current = totp_at(self.tick, self.state.get("totp_codes", []), self.state.get("totp_period", 1))
+                expected[totp_field] = current
+                submitted = fields.get(totp_field, "")
+                if submitted and submitted != current:
+                    code_status = "expired" if submitted in set(self.state.get("totp_codes", [])) else "wrong"
             empty = [k for k in expected if not fields.get(k)]
             if empty:
                 err = f"Required field(s) empty: {', '.join(empty)}."
                 self.state["last_save_error"] = err
                 return True, err, {"empty": empty}
+            mismatches = [k for k, want in expected.items() if fields.get(k, "") != want]
             if mismatches:
-                err = f"Could not submit: {', '.join(mismatches)} did not match."
+                err = (
+                    "Code expired — fetch the current one and retry."
+                    if code_status == "expired"
+                    else f"Could not submit: {', '.join(mismatches)} did not match."
+                )
                 self.state["last_save_error"] = err
-                return True, err, {"mismatches": mismatches}
+                changes: dict[str, Any] = {"mismatches": mismatches}
+                if code_status:
+                    changes["submitted_code_status"] = code_status
+                return True, err, changes
             self.state["status"] = "submitted"
             self.state.pop("last_save_error", None)
-            return True, None, {"status": ["drafting", "submitted"]}
+            changes = {"status": ["drafting", "submitted"]}
+            if totp_field:
+                changes["submitted_code_status"] = "current"
+            return True, None, changes
         return False, f"browser form does not support {action_type} on {target}", {}
 
 
@@ -729,8 +847,168 @@ class MockProfileApp(App):
         return False, f"profile does not support action {action_type}", {}
 
 
+class MockInvitePhotoApp(App):
+    """Phone photo of a paper invite. event_title and event_date are copyable values so the
+    agent can carry them to a calendar on another device (e.g. add to Google Calendar)."""
+
+    def render(self) -> dict[str, Any]:
+        return {
+            "kind": "invite_photo",
+            "title": self.state.get("title", "Invite"),
+            "event_title_visible": self.state.get("event_title", ""),
+            "event_date_visible": self.state.get("event_date", ""),
+            "note": self.state.get("note", ""),
+            "hint": "Copy the event title or date to add it to a calendar.",
+            "element_bounds": self.element_bounds(),
+        }
+
+    def element_bounds(self) -> list[dict[str, Any]]:
+        return [
+            {"target": "event_title", "kind": "copyable",
+             "value": self.state.get("event_title", ""), "x": 10, "y": 40, "w": 228, "h": 56},
+            {"target": "event_date", "kind": "copyable",
+             "value": self.state.get("event_date", ""), "x": 10, "y": 110, "w": 228, "h": 56},
+        ]
+
+    def handle_action(self, action_type, target, value):
+        if action_type == "view":
+            return True, None, {}
+        return False, f"invite photo does not support action {action_type}", {}
+
+
+class MockFileShareApp(App):
+    """Phone files surface. Each file's name is a copyable value, so the agent can 'share' a
+    specific file to another environment via the handoff bus (then paste into a desktop
+    drop/import target)."""
+
+    def render(self) -> dict[str, Any]:
+        return {
+            "kind": "file_share",
+            "title": self.state.get("title", "Files"),
+            "files": list(self.state.get("files", [])),
+            "hint": "Copy a file to send it to another device.",
+            "element_bounds": self.element_bounds(),
+        }
+
+    def element_bounds(self) -> list[dict[str, Any]]:
+        bounds: list[dict[str, Any]] = []
+        y = 40
+        for f in self.state.get("files", []):
+            bounds.append({
+                "target": f"file:{f.get('id')}", "kind": "copyable",
+                "value": f.get("name", ""), "x": 10, "y": y, "w": 228, "h": 48,
+            })
+            y += 56
+        return bounds
+
+    def handle_action(self, action_type, target, value):
+        if action_type == "view":
+            return True, None, {}
+        return False, f"file share does not support action {action_type}", {}
+
+
+class MockFileDropApp(App):
+    """Desktop drop / import target. Accepts a pasted file name and flips status to
+    'received' when it matches expected_file. Used as the desktop end of a phone -> desktop
+    file transfer (e.g. print a boarding pass, open a doc in the editor)."""
+
+    def render(self) -> dict[str, Any]:
+        status = self.state.get("status", "empty")
+        return {
+            "kind": "file_drop",
+            "title": self.state.get("title", "Drop files"),
+            "status_text": (
+                self.state.get("success_text", "File received.")
+                if status == "received" else self.state.get("hint", "Drop a file here.")
+            ),
+            "received_file": self.state.get("received_file", ""),
+            "status": status,
+            "fields": {"drop": self.state.get("drop_field", "")},
+            "element_bounds": [{"target": "drop", "kind": "input", "x": 0, "y": 72, "w": 536, "h": 80}],
+            "last_save_error": self.state.get("last_save_error"),
+        }
+
+    def handle_action(self, action_type, target, value):
+        if action_type == "view":
+            return True, None, {}
+        if action_type == "type" and target == "drop":
+            val = value or ""
+            expected = self.state.get("expected_file", "")
+            if expected and val == expected:
+                self.state["status"] = "received"
+                self.state["received_file"] = val
+                self.state.pop("last_save_error", None)
+                return True, None, {"status": ["empty", "received"], "received_file": val}
+            self.state["drop_field"] = val
+            if expected and val != expected:
+                err = f"Could not import: \"{val}\" is not the expected file."
+                self.state["last_save_error"] = err
+                return True, err, {"last_save_error_set": err}
+            return True, None, {"drop_field": val}
+        return False, f"file drop does not support {action_type} on {target}", {}
+
+
+class MockProfilePhotoApp(App):
+    """Desktop profile-photo setter. Receives an image name (pasted from the phone gallery)
+    into the `image` field and saves only when it matches expected_image — the authoritative
+    (newest) headshot. A stale image name leaves it drafting (source-of-truth decoy)."""
+
+    def render(self) -> dict[str, Any]:
+        status = self.state.get("status", "drafting")
+        return {
+            "kind": "profile_photo",
+            "title": self.state.get("title", "Profile photo"),
+            "status": status,
+            "status_text": "Saved." if status == "saved" else self.state.get("hint", "Set your profile photo."),
+            "fields": {"image": self.state.get("selected_image", "")},
+            "buttons": ["save"] if status != "saved" else [],
+            "last_save_error": self.state.get("last_save_error"),
+            "element_bounds": self.element_bounds(),
+        }
+
+    def element_bounds(self) -> list[dict[str, Any]]:
+        if self.state.get("status") == "saved":
+            return []
+        return [
+            {"target": "image", "kind": "input", "x": 0, "y": 72, "w": 536, "h": 44},
+            {"target": "save", "kind": "button", "x": 0, "y": 144, "w": 80, "h": 40},
+        ]
+
+    def handle_action(self, action_type, target, value):
+        if action_type == "view":
+            return True, None, {}
+        if action_type == "type" and target == "image":
+            if self.state.get("status") == "saved":
+                return False, "already saved", {}
+            old = self.state.get("selected_image", "")
+            self.state["selected_image"] = value or ""
+            self.state.pop("last_save_error", None)
+            return True, None, {"selected_image": [old, self.state["selected_image"]]}
+        if action_type in ("click", "tap") and target == "save":
+            if self.state.get("status") == "saved":
+                return False, "already saved", {}
+            sel = self.state.get("selected_image", "")
+            if not sel:
+                err = "Select a photo first."
+                self.state["last_save_error"] = err
+                return True, err, {"last_save_error_set": err}
+            if sel == self.state.get("expected_image"):
+                self.state["status"] = "saved"
+                self.state.pop("last_save_error", None)
+                return True, None, {"status": ["drafting", "saved"]}
+            err = "Could not save: that photo is out of date. Use the most recent one."
+            self.state["last_save_error"] = err
+            return True, err, {"last_save_error_set": err}
+        return False, f"profile photo does not support {action_type} on {target}", {}
+
+
 APP_REGISTRY: dict[str, type[App]] = {
     "MockAuthenticatorApp": MockAuthenticatorApp,
+    "MockTotpAuthenticatorApp": MockTotpAuthenticatorApp,
+    "MockInvitePhotoApp": MockInvitePhotoApp,
+    "MockFileShareApp": MockFileShareApp,
+    "MockFileDropApp": MockFileDropApp,
+    "MockProfilePhotoApp": MockProfilePhotoApp,
     "MockExpensePortalApp": MockExpensePortalApp,
     "MockPhotosApp": MockPhotosApp,
     "MockExpenseReportApp": MockExpenseReportApp,

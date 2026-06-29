@@ -1,36 +1,62 @@
-"""Available v0 tasks, keyed by task_id."""
+"""Available v0 tasks, keyed by task_id.
 
-from typing import Callable
+Builders are auto-discovered: any module in this package that defines a top-level
+``build_*_task`` function (callable with no required args) is imported, the function is
+re-exported at the package level, and the task it builds is registered in TASK_REGISTRY
+under its ``task_id``. Dropping a new ``catalog/`` task into a new module is enough to make
+it runnable — no edit to this file required.
+"""
+
+from __future__ import annotations
+
+import importlib
+import pkgutil
+from typing import Callable, cast
 
 from ..schemas import Task
-from .authenticator_handoff import build_authenticator_handoff_task
-from .bank_password_reset import build_bank_password_reset_task
-from .boundary_status_update import build_boundary_status_update_task
-from .clarification_sara import build_clarification_sara_task
-from .contract_price_update import build_contract_price_update_task
-from .expense_then_notify import build_expense_then_notify_task
-from .minimal_transfer import build_minimal_transfer_task
-from .ooo_setup import build_ooo_setup_task
-from .receipt_amount import build_receipt_amount_task
-from .stale_contact_jordan import build_stale_contact_jordan_task
-from .standup_reminder import build_standup_reminder_task
-from .work_to_personal_calendar import build_work_to_personal_calendar_task
+
+TASK_REGISTRY: dict[str, Callable[[], Task]] = {}
+
+# Discovered builder function names, populated below and exported for `from ... import`.
+_builder_names: list[str] = []
+
+# Non-fatal discovery problems (import error, build error, duplicate id). Kept so a strict
+# check (e.g. in tests) can assert the registry is clean, while a single broken/half-written
+# module never breaks `import personalgui.tasks` for everything else — important when many
+# task modules are being added concurrently.
+DISCOVERY_ERRORS: list[str] = []
 
 
-TASK_REGISTRY: dict[str, Callable[[], Task]] = {
-    "auth_handoff_v0_01": build_authenticator_handoff_task,
-    "receipt_amount_v0_01": build_receipt_amount_task,
-    "standup_reminder_v0_01": build_standup_reminder_task,
-    "work_to_personal_calendar_v0_01": build_work_to_personal_calendar_task,
-    "expense_then_notify_v0_01": build_expense_then_notify_task,
-    "clarification_sara_v0_01": build_clarification_sara_task,
-    "boundary_status_update_v0_01": build_boundary_status_update_task,
-    "minimal_transfer_v0_01": build_minimal_transfer_task,
-    "bank_password_reset_v0_01": build_bank_password_reset_task,
-    "contract_price_update_v0_01": build_contract_price_update_task,
-    "stale_contact_jordan_v0_01": build_stale_contact_jordan_task,
-    "ooo_setup_v0_01": build_ooo_setup_task,
-}
+def _discover() -> None:
+    for _finder, modname, ispkg in pkgutil.iter_modules(__path__):
+        if ispkg or modname.startswith("_"):
+            continue
+        try:
+            mod = importlib.import_module(f"{__name__}.{modname}")
+        except Exception as exc:  # a broken module shouldn't sink the whole package
+            DISCOVERY_ERRORS.append(f"import {modname}: {exc!r}")
+            continue
+        for attr in dir(mod):
+            if not (attr.startswith("build_") and attr.endswith("_task")):
+                continue
+            raw = getattr(mod, attr)
+            if not callable(raw):
+                continue
+            fn = cast(Callable[[], Task], raw)
+            try:
+                task = fn()
+            except Exception as exc:
+                DISCOVERY_ERRORS.append(f"build {modname}.{attr}: {exc!r}")
+                continue
+            if task.task_id in TASK_REGISTRY:
+                DISCOVERY_ERRORS.append(f"duplicate task_id {task.task_id!r} from {modname}.{attr}")
+                continue
+            globals()[attr] = fn  # re-export at package level
+            _builder_names.append(attr)
+            TASK_REGISTRY[task.task_id] = fn
+
+
+_discover()
 
 
 def list_tasks() -> list[dict[str, str]]:
@@ -44,16 +70,8 @@ def list_tasks() -> list[dict[str, str]]:
 
 def build_task(task_id: str) -> Task:
     if task_id not in TASK_REGISTRY:
-        raise KeyError(f"unknown task_id: {task_id}; valid: {list(TASK_REGISTRY)}")
+        raise KeyError(f"unknown task_id: {task_id}; valid: {sorted(TASK_REGISTRY)}")
     return TASK_REGISTRY[task_id]()
 
 
-__all__ = [
-    "TASK_REGISTRY",
-    "list_tasks",
-    "build_task",
-    "build_authenticator_handoff_task",
-    "build_receipt_amount_task",
-    "build_standup_reminder_task",
-    "build_work_to_personal_calendar_task",
-]
+__all__ = ["TASK_REGISTRY", "list_tasks", "build_task", *sorted(set(_builder_names))]
